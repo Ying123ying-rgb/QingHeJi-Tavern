@@ -1,3 +1,4 @@
+import { currentCharacter, currentUser } from './actor-sources.js';
 import { DEFAULT_TEMPLATE_ID, worldTemplates } from '../data/world-templates.js';
 
 export const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -77,7 +78,7 @@ const personalFields = ['currency', 'stats', 'inventory', 'skills', 'relationshi
 export function createActor(templateId, descriptor, id) {
     const base = createSingleState(templateId);
     return {
-        id, name: text(descriptor.name, '默认主角'),
+        id, name: text(descriptor.name, '默认人物'),
         sourceType: descriptor.sourceType ?? 'custom', sourceId: descriptor.sourceId ?? null,
         avatar: descriptor.avatar ?? null,
         currency: base.currency, stats: base.stats, inventory: {}, skills: {}, relationships: {}, personalState: {},
@@ -88,28 +89,34 @@ export function createActor(templateId, descriptor, id) {
 export function createState(templateId = DEFAULT_TEMPLATE_ID, enabled = false) {
     const base = createSingleState(templateId, enabled);
     return {
-        schemaVersion: 3, enabled: base.enabled, world: base.world,
-        calendar: base.calendar, worldState: {}, activeActorId: null, actors: {}, nextActorNumber: 1,
+        schemaVersion: 5, enabled: base.enabled, world: base.world,
+        calendar: base.calendar, worldState: {}, controlMode: 'character', inspectedActorId: null,
+        actors: {}, nextActorNumber: 1,
     };
 }
 
 export function needsMigration(saved) {
-    return isObject(saved) && !Object.hasOwn(saved, 'actors')
+    if (!isObject(saved)) return false;
+    if (isObject(saved.actors)) return !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
+    return !Object.hasOwn(saved, 'actors')
         && (isLegacyState(saved) || Object.hasOwn(saved, 'currency') || Object.hasOwn(saved, 'stats'));
 }
 
-export function readState(saved, protagonist = { name: '默认主角', sourceType: 'custom' }) {
+export function readState(saved, descriptor = { name: '默认人物', sourceType: 'custom' }) {
     if (!isObject(saved)) return createState();
-    if (needsMigration(saved)) {
+    if (!Object.hasOwn(saved, 'actors') && needsMigration(saved)) {
         const old = readSingleState(saved);
         const result = { ...copy(old), ...createState(getTemplate(old.world.templateId)?.id, old.enabled) };
         result.world = old.world;
         result.calendar = old.calendar;
         result.worldState = old.worldState;
-        const actor = createActor(getTemplate(old.world.templateId)?.id, protagonist, 'actor_1');
+        const actor = createActor(getTemplate(old.world.templateId)?.id, descriptor, 'actor_1');
         for (const key of personalFields) if (Object.hasOwn(old, key)) actor[key] = copy(old[key]);
         result.actors[actor.id] = actor;
-        result.activeActorId = actor.id;
+        result.controlMode = actor.sourceType === 'user' ? 'user' : 'character';
+        delete result.playerActorId;
+        result.inspectedActorId = actor.id;
+        delete result.activeActorId;
         result.nextActorNumber = 2;
         for (const key of personalFields) delete result[key];
         return result;
@@ -125,11 +132,17 @@ export function readState(saved, protagonist = { name: '默认主角', sourceTyp
         if (!isObject(actor) || !/^actor_[A-Za-z0-9_-]+$/.test(id)) continue;
         const base = createActor(getTemplate(result.world.templateId)?.id, actor, id);
         const values = readSingleState({ ...actor, world: result.world });
-        result.actors[id] = { ...base, ...copy(actor), id, name: text(actor.name, '默认主角') };
+        result.actors[id] = { ...base, ...copy(actor), id, name: text(actor.name, '默认人物') };
         for (const key of personalFields) result.actors[id][key] = copy(values[key] ?? base[key]);
     }
-    result.activeActorId = Object.hasOwn(result.actors, result.activeActorId)
-        ? result.activeActorId : Object.keys(result.actors)[0] ?? null;
+    const historical = result.actors[saved.playerActorId] ?? result.actors[saved.activeActorId];
+    result.controlMode = ['character', 'user'].includes(saved.controlMode) ? saved.controlMode
+        : historical?.sourceType === 'user' ? 'user' : 'character';
+    result.inspectedActorId = Object.hasOwn(result.actors, saved.inspectedActorId)
+        ? saved.inspectedActorId : historical?.id ?? null;
+    result.schemaVersion = Math.max(5, number(saved.schemaVersion, 5));
+    delete result.activeActorId;
+    delete result.playerActorId;
     for (const key of personalFields) delete result[key];
     return result;
 }
@@ -146,25 +159,51 @@ export function addActor(game, descriptor) {
     const actor = createActor(game.world.templateId, descriptor, `actor_${serial}`);
     game.actors[actor.id] = actor;
     game.nextActorNumber = serial + 1;
-    if (!game.activeActorId) game.activeActorId = actor.id;
     return actor;
 }
 
-export function selectActor(game, id) {
-    if (!Object.hasOwn(game.actors, id)) return false;
-    game.activeActorId = id;
+// Context is supplied by the caller; no global host access or fixed control ID.
+// Preserve card filename identity across character array reordering.
+export function resolveControlledActor(game, ctx) {
+    if (!ctx) return null;
+    const descriptor = game.controlMode === 'user' ? currentUser(ctx) : currentCharacter(ctx);
+    if (!descriptor) return null;
+    let actor = Object.values(game.actors).find(actor => actor.sourceType === descriptor.sourceType
+        && (descriptor.sourceType === 'user' || actor.sourceId === descriptor.sourceId));
+    if (!actor && getTemplate(game.world.templateId)) actor = addActor(game, descriptor);
+    if (actor && !Object.hasOwn(game.actors, game.inspectedActorId)) game.inspectedActorId = actor.id;
+    return actor ?? null;
+}
+
+export function resolveActorContext(game, ctx) {
+    return { controlledActor: resolveControlledActor(game, ctx), currentCharacter: currentCharacter(ctx),
+        inspectedActor: game.actors[game.inspectedActorId] ?? null };
+}
+
+export function setControlMode(game, mode, ctx) {
+    if (!['character', 'user'].includes(mode)) return false;
+    game.controlMode = mode;
+    resolveControlledActor(game, ctx);
     return true;
 }
 
-export function deleteActor(game, id) {
+export function inspectActor(game, id) {
     if (!Object.hasOwn(game.actors, id)) return false;
+    game.inspectedActorId = id;
+    return true;
+}
+
+export function deleteActor(game, id, ctx) {
+    if (id === resolveControlledActor(game, ctx)?.id || !Object.hasOwn(game.actors, id)) return false;
     delete game.actors[id];
-    if (game.activeActorId === id) game.activeActorId = Object.keys(game.actors)[0] ?? null;
+    if (game.inspectedActorId === id) game.inspectedActorId = resolveControlledActor(game, ctx)?.id ?? null;
     return true;
 }
 
-export function changeCurrency(game, delta) {
-    const actor = game.actors[game.activeActorId];
+// All present/future ordinary actions resolve the controlled actor through here,
+// never through inspectedActorId. No inventory/skill gameplay is implemented.
+export function changeCurrency(game, delta, ctx) {
+    const actor = resolveControlledActor(game, ctx);
     if (!actor || !Number.isFinite(delta) || !Number.isFinite(actor.currency.amount + delta)) return false;
     actor.currency.amount += delta;
     return true;
@@ -176,7 +215,8 @@ export function resetWorld(game, templateId) {
     for (const actor of Object.values(game.actors)) {
         result.actors[actor.id] = createActor(templateId, actor, actor.id);
     }
-    result.activeActorId = Object.hasOwn(result.actors, game.activeActorId)
-        ? game.activeActorId : Object.keys(result.actors)[0] ?? null;
+    result.controlMode = game.controlMode;
+    result.inspectedActorId = Object.hasOwn(result.actors, game.inspectedActorId)
+        ? game.inspectedActorId : null;
     return result;
 }

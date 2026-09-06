@@ -1,5 +1,5 @@
 import { worldTemplates } from './data/world-templates.js';
-import { readState, needsMigration, isObject, getTemplate, addActor, selectActor, deleteActor, changeCurrency, resetWorld } from './core/game-state.js';
+import { readState, needsMigration, isObject, getTemplate, addActor, inspectActor, setControlMode, resolveControlledActor, deleteActor, changeCurrency, resetWorld } from './core/game-state.js';
 import { currentCharacter, currentUser } from './core/actor-sources.js';
 import { mountFloatingPanel } from './ui/floating-panel.js';
 
@@ -27,7 +27,9 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
     }
 
     function state(ctx) {
-        return readState(ctx.chatMetadata?.[KEY], currentCharacter(ctx) ?? undefined);
+        const game = readState(ctx.chatMetadata?.[KEY], currentCharacter(ctx) ?? undefined);
+        if (game.enabled) resolveControlledActor(game, ctx);
+        return game;
     }
 
     function pluginEnabled(ctx) {
@@ -59,8 +61,8 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         if (ui.mounted) return;
         const view = mountFloatingPanel(ui.chat, ui.status, {
             open: openPanel, close: closePanel, world: changeWorld, add: addPerson,
-            currency: delta => editActor(game => changeCurrency(game, delta)),
-            selectActor: id => editActor(game => selectActor(game, id)),
+            currency: delta => editActor(game => changeCurrency(game, delta, context())),
+            control: () => editActor(game => setControlMode(game, game.controlMode === 'user' ? 'character' : 'user', context())),
         });
         Object.assign(ui, view); ui.viewKeys = Object.keys(view); ui.mounted = true;
         const unknown = element('option', '未识别模板（可重新选择）');
@@ -142,11 +144,16 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         }
     }
 
-    function changeGame() {
+    async function changeGame() {
         const desired = ui.game.checked;
         const ctx = context();
         if (!canEdit(ctx)) { refresh(); return; }
-        return persist(ctx, { ...state(ctx), enabled: desired });
+        const next = { ...state(ctx), enabled: desired };
+        if (desired) resolveControlledActor(next, ctx);
+        await persist(ctx, next);
+        const current = context();
+        if (desired && current.chatMetadata === ctx.chatMetadata && identity(current).key === identity(ctx).key
+            && state(current).enabled) openPanel();
     }
 
     function changeWorld() {
@@ -169,7 +176,9 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         if (!ui || busy) return;
         const ctx = context();
         const saved = ctx.chatMetadata?.[KEY];
-        if (!identity(ctx).valid || !needsMigration(saved) || migrationAttempts.has(saved)) return;
+        if (!identity(ctx).valid || !isObject(saved) || migrationAttempts.has(saved)) return;
+        const next = state(ctx);
+        if (!needsMigration(saved) && JSON.stringify(next) === JSON.stringify(saved)) return;
         // Failed automatic saves are not retried in a loop. A reload or a manual
         // game toggle can retry; failed saves restore the untouched old object.
         migrationAttempts.add(saved);
@@ -215,8 +224,9 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         const ctx = context();
         if (!canEdit(ctx) || ctx.chatMetadata !== expected.chatMetadata || identity(ctx).key !== identity(expected).key) return;
         const actor = state(ctx).actors[id];
+        if (id === resolveControlledActor(state(ctx), ctx)?.id) return;
         if (!actor || !globalThis.confirm(`删除人物“${actor.name}”及其模拟状态？此操作不会修改角色卡或聊天记录。`)) return;
-        return editActor(game => deleteActor(game, id), expected);
+        return editActor(game => deleteActor(game, id, ctx), expected);
     }
 
     async function renameUser(id, expected) {
@@ -231,35 +241,39 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
     function renderActors(ctx, game) {
         ui.actorController?.abort(); ui.actorController = new AbortController();
         const disabled = ui.game.disabled;
+        const controlled = resolveControlledActor(game, ctx);
         const actors = Object.values(game.actors);
-        ui.active.replaceChildren();
-        if (!actors.length) {
-            const empty = element('option', '尚未添加人物'); empty.value = ''; ui.active.append(empty);
-        }
         ui.actorList.replaceChildren();
         for (const actor of actors) {
-            const option = element('option', actor.name); option.value = actor.id; ui.active.append(option);
             const row = element('div', undefined, 'qhjt-actor-row');
-            const label = element('span', `${actor.id === game.activeActorId ? '●' : '○'} ${actor.name}`, 'qhjt-actor-name');
+            const view = async () => {
+                if (!canEdit(context()) || context().chatMetadata !== ctx.chatMetadata || identity(context()).key !== identity(ctx).key) return;
+                ui.detail.hidden = false;
+                await editActor(value => inspectActor(value, actor.id), ctx);
+                if (ui.mounted && !ui.detail.hidden && context().chatMetadata === ctx.chatMetadata) {
+                    ui.detail.scrollIntoView({ block: 'nearest' });
+                }
+            };
+            const label = button(`${actor.id === controlled?.id ? '当前操作 · ' : ''}${actor.name}`, view, `qhjt-inspect-${actor.id}`);
+            label.className = 'qhjt-button qhjt-actor-name';
             label.title = actor.name;
-            const source = { character: '角色卡', user: '玩家', custom: '自定义' }[actor.sourceType] ?? '其他来源';
+            label.disabled = disabled;
+            const source = { character: '角色卡', user: 'User', custom: 'NPC / 自定义' }[actor.sourceType] ?? '其他来源';
             const actions = element('div', undefined, 'qhjt-actions');
-            const activate = button('切换为当前主角', () => editActor(value => selectActor(value, actor.id), ctx));
             const remove = button('删除', () => removePerson(actor.id, ctx));
-            activate.disabled = disabled || actor.id === game.activeActorId;
-            remove.disabled = disabled;
-            actions.append(activate, remove);
+            remove.disabled = disabled || actor.id === controlled?.id;
+            if (actor.id !== controlled?.id) actions.append(remove);
             if (actor.sourceType === 'user') {
                 const rename = button('修改显示名称', () => renameUser(actor.id, ctx));
                 rename.disabled = disabled; actions.append(rename);
             }
             row.append(label, element('small', source), actions); ui.actorList.append(row);
         }
-        ui.active.value = game.activeActorId ?? '';
-        ui.active.disabled = disabled || !actors.length;
         ui.addCharacter.disabled = disabled || !currentCharacter(ctx) || !getTemplate(game.world.templateId);
         ui.addUser.disabled = ui.addCustom.disabled = disabled || !getTemplate(game.world.templateId);
-        ui.plus.disabled = ui.minus.disabled = disabled || !game.activeActorId;
+        ui.plus.disabled = ui.minus.disabled = disabled || !controlled;
+        ui.control.disabled = disabled;
+        ui.control.textContent = game.controlMode === 'user' ? '跟随当前角色' : '切换到我';
     }
 
     function rows(node, values) {
@@ -268,10 +282,10 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
     }
 
     function renderPanel(ctx, game) {
-        const actor = game.actors[game.activeActorId];
+        const actor = resolveControlledActor(game, ctx);
         rows(ui.values, [
             ['世界', getTemplate(game.world.templateId)?.displayName ?? game.world.templateId],
-            ['当前主角', actor?.name ?? '尚未添加人物'],
+            ['当前操作角色', actor?.name ?? '当前无可识别角色卡'],
         ]);
         rows(ui.worldValues, [
             [game.calendar.dateLabel, game.calendar.date],
@@ -280,7 +294,13 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         rows(ui.actorValues, actor ? [
             [actor.currency.label, `${actor.currency.symbol}${actor.currency.amount}`],
             ...actor.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
-        ] : [['提示', '请在「人物」页添加人物。']]);
+        ] : [['提示', '当前无可识别角色卡，可点击“切换到我”。']]);
+        const inspected = game.actors[game.inspectedActorId];
+        rows(ui.detailValues, inspected ? [
+            ['正在查看', inspected.name], ['身份', inspected.id === resolveControlledActor(game, ctx)?.id ? '当前操作角色' : 'NPC（仅查看）'],
+            [inspected.currency.label, `${inspected.currency.symbol}${inspected.currency.amount}`],
+            ...inspected.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
+        ] : [['提示', '请点击人物名称查看详情。']]);
     }
 
     function openPanel() {

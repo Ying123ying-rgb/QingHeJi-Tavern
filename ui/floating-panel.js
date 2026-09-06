@@ -65,19 +65,22 @@ export function mountFloatingPanel(chat, status, handlers) {
     const plus = button('货币 +100', 'qhjt-plus', () => handlers.currency(100));
     const minus = button('货币 -100', 'qhjt-minus', () => handlers.currency(-100));
     const testButtons = node('div', undefined, 'qhjt-actions'); testButtons.append(plus, minus);
-    pages.state.append(node('h3', '世界状态'), worldValues, node('h3', '人物状态'), actorValues,
+    const control = button('切换到我', 'qhjt-control', handlers.control);
+    pages.state.append(control, node('h3', '世界状态'), worldValues, node('h3', '当前操作角色状态'), actorValues,
         node('h3', '测试修改'), testButtons);
     const select = (id, label, page) => {
         const caption = node('label', label, 'qhjt-label'); caption.htmlFor = id;
         const input = node('select'); input.id = id; page.append(caption, input); return input;
     };
-    const active = select('qhjt-active', '当前主角', pages.actors);
-    listen(active, 'change', () => handlers.selectActor(active.value));
     const addCharacter = button('添加当前角色', 'qhjt-add-character', () => handlers.add('character'));
     const addUser = button('添加“我”', 'qhjt-add-user', () => handlers.add('user'));
     const addCustom = button('添加自定义人物', 'qhjt-add-custom', () => handlers.add('custom'));
     const addButtons = node('div', undefined, 'qhjt-actions'); addButtons.append(addCharacter, addUser, addCustom);
     const actorList = node('div'); actorList.id = 'qhjt-actors';
+    const detail = node('section'); detail.id = 'qhjt-actor-detail'; detail.hidden = true;
+    const detailValues = node('dl', undefined, 'qhjt-values'); detailValues.id = 'qhjt-detail-values';
+    const detailClose = button('关闭人物详情', 'qhjt-detail-close', () => { detail.hidden = true; });
+    detail.append(node('h3', '人物详情'), node('p', '此处仅查看人物状态，行动仍由当前操作角色执行。'), detailValues, detailClose);
     const nameForm = node('form'); nameForm.id = 'qhjt-name-form'; nameForm.hidden = true;
     const nameLabel = node('label', '人物名称', 'qhjt-label'); nameLabel.htmlFor = 'qhjt-name';
     const nameInput = node('input'); nameInput.id = 'qhjt-name'; nameInput.type = 'text'; nameInput.required = true;
@@ -85,7 +88,7 @@ export function mountFloatingPanel(chat, status, handlers) {
     const nameCancel = button('取消', 'qhjt-name-cancel', () => finishName(null));
     const nameActions = node('div', undefined, 'qhjt-actions'); nameActions.append(nameOk, nameCancel);
     nameForm.append(nameLabel, nameInput, nameActions);
-    pages.actors.append(addButtons, nameForm, actorList);
+    pages.actors.append(node('p', '点击人物名称查看状态。当前操作角色不会随查看对象改变。'), addButtons, nameForm, actorList, detail);
     let resolveName;
     function finishName(value) {
         nameForm.hidden = true;
@@ -129,6 +132,7 @@ export function mountFloatingPanel(chat, status, handlers) {
         entry.setAttribute('aria-expanded', 'true'); position(); close.focus();
     }
     function hide(focus = false) {
+        detail.hidden = true;
         finishName(null); if (overlay.open) overlay.close();
         panel.hidden = true; unlockScroll(); entry.setAttribute('aria-expanded', 'false');
         if (focus && !host.hidden && host.isConnected) entry.focus();
@@ -164,7 +168,8 @@ export function mountFloatingPanel(chat, status, handlers) {
     const input = document.getElementById('form_sheld'); if (input) observer?.observe(input);
     selectTab('state'); position();
     return { host, entry, overlay, panel, close, values, worldValues, actorValues, plus, minus, world,
-        active, actorList, addCharacter, addUser, addCustom, info, controller, requestName,
+        actorList, addCharacter, addUser, addCustom, control,
+        detail, detailValues, info, controller, requestName,
         openFloating: open, closeFloating: hide, positionFloating: position,
         destroyFloating() { hide(); controller.abort(); observer?.disconnect(); host.remove(); overlay.remove(); },
     };
