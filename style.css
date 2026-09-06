@@ -1,0 +1,29 @@
+.qhjt-settings, .qhjt-host {
+    box-sizing: border-box;
+    color: var(--SmartThemeBodyColor, #eee);
+    overflow-wrap: anywhere;
+}
+.qhjt-settings { padding: 8px; }
+.qhjt-settings h3, .qhjt-panel h3 { margin: 4px 0; font-size: 1rem; }
+.qhjt-toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
+.qhjt-toggle input { flex: 0 0 auto; width: 20px; height: 20px; }
+.qhjt-info { margin: 6px 0; font-size: 0.85rem; }
+.qhjt-host {
+    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    padding: 4px 8px;
+    border-top: 1px solid var(--SmartThemeBorderColor, #666);
+    background: var(--SmartThemeBlurTintColor, #262626);
+}
+.qhjt-host[hidden], .qhjt-panel[hidden] { display: none !important; }
+.qhjt-host .qhjt-button { min-height: 44px; min-width: 64px; margin: 0; padding: 6px 12px; touch-action: manipulation; }
+.qhjt-host .qhjt-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.qhjt-panel { max-height: 35vh; max-height: 35dvh; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
+.qhjt-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.qhjt-values { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 8px 0; }
+.qhjt-values dt, .qhjt-values dd { margin: 0; }
+@media (max-width: 480px) {
+    .qhjt-host { padding: 4px 6px; }
+    .qhjt-values { gap: 4px 10px; }
+}
