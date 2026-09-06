@@ -4,6 +4,8 @@
     overflow-wrap: anywhere;
 }
 .qhjt-settings { padding: 8px; }
+.qhjt-world-label { display: block; margin-top: 8px; }
+.qhjt-settings .qhjt-world { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; min-height: 44px; padding: 6px; font: inherit; }
 .qhjt-settings h3, .qhjt-panel h3 { margin: 4px 0; font-size: 1rem; }
 .qhjt-toggle { display: flex; align-items: center; gap: 10px; min-height: 44px; cursor: pointer; }
 .qhjt-toggle input { flex: 0 0 auto; width: 20px; height: 20px; }
@@ -20,9 +22,9 @@
 .qhjt-host .qhjt-button { min-height: 44px; min-width: 64px; margin: 0; padding: 6px 12px; touch-action: manipulation; }
 .qhjt-host .qhjt-button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .qhjt-panel { max-height: 35vh; max-height: 35dvh; overflow-y: auto; overscroll-behavior: contain; padding: 4px; }
-.qhjt-panel-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.qhjt-values { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 14px; margin: 8px 0; }
-.qhjt-values dt, .qhjt-values dd { margin: 0; }
+.qhjt-panel-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.qhjt-values { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 5px 14px; margin: 8px 0; }
+.qhjt-values dt, .qhjt-values dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
 @media (max-width: 480px) {
     .qhjt-host { padding: 4px 6px; }
     .qhjt-values { gap: 4px 10px; }

@@ -1,22 +1,16 @@
+import { worldTemplates } from './data/world-templates.js';
+import { createState, readState, isLegacyState, isObject, getTemplate } from './core/game-state.js';
+
 (() => {
     'use strict';
 
     const KEY = 'qingheji_tavern';
-    const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-    const defaults = () => ({
-        schemaVersion: 1,
-        enabled: false,
-        money: 100,
-        date: '三月初一',
-        time: '辰时',
-        stamina: { current: 100, max: 100 },
-        satiety: { current: 100, max: 100 },
-    });
     const context = () => globalThis.SillyTavern.getContext();
     let ui;
     let busy = false;
     let renderedMetadata;
     let renderedIdentity;
+    const migrationAttempts = new WeakSet();
 
     function identity(ctx) {
         const chatId = ctx.chatId ?? ctx.getCurrentChatId?.();
@@ -30,16 +24,8 @@
         };
     }
 
-    // Read-only default merging: merely viewing a chat does not create a save.
-    // Unknown fields are preserved for future schema additions.
     function state(ctx) {
-        const saved = ctx.chatMetadata?.[KEY];
-        const result = { ...defaults(), ...(isObject(saved) ? saved : {}) };
-        result.enabled = result.enabled === true;
-        for (const field of ['stamina', 'satiety']) {
-            result[field] = { current: 100, max: 100, ...(isObject(result[field]) ? result[field] : {}) };
-        }
-        return result;
+        return readState(ctx.chatMetadata?.[KEY]);
     }
 
     function pluginEnabled(ctx) {
@@ -80,35 +66,38 @@
         ui.game.checked = info.valid && game.enabled;
         ui.master.disabled = busy;
         ui.game.disabled = busy || !pluginEnabled(ctx) || !info.valid || !isObject(ctx.chatMetadata);
+        ui.world.disabled = ui.game.disabled;
+        ui.world.value = getTemplate(game.world.templateId) ? game.world.templateId : '';
         ui.info.textContent = `角色：${info.name}；characterId：${ctx.characterId ?? '无'}；聊天标识：${info.chatId ?? '无'}`;
         ui.host.hidden = !pluginEnabled(ctx) || !info.valid || !game.enabled;
         if (ui.host.hidden) closePanel();
     }
 
-    async function changeGame() {
-        const desired = ui.game.checked;
-        const ctx = context();
+    function canEdit(ctx) {
         const info = identity(ctx);
-        // Reject a click on stale UI during a chat transition.
-        if (busy || !pluginEnabled(ctx) || !info.valid || !isObject(ctx.chatMetadata)
-            || ctx.chatMetadata !== renderedMetadata || info.key !== renderedIdentity) {
-            refresh();
-            return;
-        }
+        return !busy && pluginEnabled(ctx) && info.valid && isObject(ctx.chatMetadata)
+            && ctx.chatMetadata === renderedMetadata && info.key === renderedIdentity;
+    }
+
+    async function persist(ctx, next, migrating = false) {
+        // Never commit a result prepared for a chat that has since changed.
+        const current = context();
+        if (busy || current.chatMetadata !== ctx.chatMetadata || identity(current).key !== identity(ctx).key) return;
         const metadata = ctx.chatMetadata;
         const hadState = Object.hasOwn(metadata, KEY);
         const previous = metadata[KEY];
-        const next = { ...state(ctx), enabled: desired };
         metadata[KEY] = next;
         busy = true;
-        ui.status.textContent = '正在请求保存…';
+        ui.status.textContent = migrating ? '正在迁移旧版游戏存档…' : '正在请求保存…';
         closePanel();
         refresh();
         try {
             // Invoke immediately, without a debounce that could target another chat.
             await ctx.saveMetadata();
             if (context().chatMetadata === metadata) {
-                ui.status.textContent = '保存请求已完成；可刷新页面检查是否保留。';
+                ui.status.textContent = migrating
+                    ? '旧版存档已转换，保存请求已完成；请刷新检查。'
+                    : '保存请求已完成；可刷新页面检查是否保留。';
             }
         } catch (error) {
             if (metadata[KEY] === next) {
@@ -116,11 +105,47 @@
                 else delete metadata[KEY];
             }
             if (context().chatMetadata === metadata) ui.status.textContent = '保存失败，请稍后重试。';
-            console.error('[青禾记 Tavern] 保存失败', error);
+            console.error('[酒馆人生模拟器] 保存失败', error);
         } finally {
             busy = false;
             refresh();
+            // A chat selected during a pending save may also need migration.
+            await migrateCurrent();
         }
+    }
+
+    function changeGame() {
+        const desired = ui.game.checked;
+        const ctx = context();
+        if (!canEdit(ctx)) { refresh(); return; }
+        return persist(ctx, { ...state(ctx), enabled: desired });
+    }
+
+    function changeWorld() {
+        const templateId = ui.world.value;
+        const ctx = context();
+        if (!canEdit(ctx) || !getTemplate(templateId) || state(ctx).world.templateId === templateId) {
+            refresh(); return;
+        }
+        const accepted = globalThis.confirm('切换世界模板将重置当前聊天的模拟游戏初始状态，但不会修改角色卡、聊天记录或其他聊天存档。');
+        // A cancelled confirmation must leave both the save and selector unchanged.
+        const current = context();
+        if (!accepted || current.chatMetadata !== ctx.chatMetadata
+            || identity(current).key !== identity(ctx).key || !canEdit(current)) {
+            refresh(); return;
+        }
+        return persist(current, createState(templateId, state(current).enabled));
+    }
+
+    function migrateCurrent() {
+        if (!ui || busy) return;
+        const ctx = context();
+        const saved = ctx.chatMetadata?.[KEY];
+        if (!identity(ctx).valid || !isLegacyState(saved) || migrationAttempts.has(saved)) return;
+        // Failed automatic saves are not retried in a loop. A reload or a manual
+        // game toggle can retry; failed saves restore the untouched old object.
+        migrationAttempts.add(saved);
+        return persist(ctx, readState(saved), true);
     }
 
     function openPanel() {
@@ -129,10 +154,13 @@
         const ctx = context();
         const game = state(ctx);
         const rows = [
-            ['当前角色', identity(ctx).name], ['游戏模式', '已开启'],
-            ['铜钱', game.money], ['日期', game.date], ['时辰', game.time],
-            ['体力', `${game.stamina.current}/${game.stamina.max}`],
-            ['饱腹', `${game.satiety.current}/${game.satiety.max}`],
+            ['当前角色', identity(ctx).name],
+            ['世界', getTemplate(game.world.templateId)?.displayName ?? game.world.templateId],
+            ['游戏模式', '已开启'],
+            [game.currency.label, `${game.currency.symbol}${game.currency.amount}`],
+            [game.calendar.dateLabel, game.calendar.date],
+            [game.calendar.timeLabel, game.calendar.time],
+            ...game.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
         ];
         ui.values.replaceChildren();
         for (const [label, value] of rows) ui.values.append(element('dt', label), element('dd', value));
@@ -146,22 +174,34 @@
         const settingsRoot = document.getElementById('extensions_settings2') ?? document.getElementById('extensions_settings');
         const chat = document.getElementById('chat');
         if (!settingsRoot || !chat?.parentElement) {
-            console.error('[青禾记 Tavern] 缺少扩展设置区或聊天区，未挂载 UI。');
+            console.error('[酒馆人生模拟器] 缺少扩展设置区或聊天区，未挂载 UI。');
             return;
         }
         const settings = element('section', undefined, 'qhjt-settings');
         settings.id = 'qhjt-settings';
         const master = toggle('插件总开关', 'qhjt-master');
         const game = toggle('当前聊天启用游戏模式', 'qhjt-game');
+        const worldLabel = element('label', '当前聊天世界模板：', 'qhjt-world-label');
+        worldLabel.htmlFor = 'qhjt-world';
+        const world = element('select', undefined, 'qhjt-world');
+        world.id = 'qhjt-world';
+        const unknown = element('option', '未识别模板（可重新选择）');
+        unknown.value = ''; unknown.disabled = true; unknown.hidden = true;
+        world.append(unknown);
+        for (const template of worldTemplates) {
+            const option = element('option', template.displayName);
+            option.value = template.id;
+            world.append(option);
+        }
         const info = element('p', undefined, 'qhjt-info');
         const status = element('p', '游戏模式默认关闭；请先选择聊天。', 'qhjt-info');
         status.setAttribute('role', 'status');
-        settings.append(element('h3', '青禾记 Tavern'), master.label, game.label, info, status);
+        settings.append(element('h3', '酒馆人生模拟器'), master.label, game.label, worldLabel, world, info, status);
 
         const host = element('section', undefined, 'qhjt-host');
         host.id = 'qhjt-host';
         host.hidden = true;
-        const entry = element('button', '青禾记', 'menu_button qhjt-button');
+        const entry = element('button', '人生模拟', 'menu_button qhjt-button');
         entry.type = 'button';
         entry.setAttribute('aria-controls', 'qhjt-panel');
         entry.setAttribute('aria-expanded', 'false');
@@ -170,7 +210,7 @@
         panel.hidden = true;
         panel.setAttribute('aria-labelledby', 'qhjt-title');
         const header = element('div', undefined, 'qhjt-panel-header');
-        const title = element('h3', '青禾记 Tavern v0.1');
+        const title = element('h3', '酒馆人生模拟器 v0.1.1');
         title.id = 'qhjt-title';
         const close = element('button', '关闭', 'menu_button qhjt-button');
         close.type = 'button';
@@ -181,7 +221,7 @@
         settingsRoot.append(settings);
         // Sibling of #chat: core message rerenders cannot remove our entry.
         chat.after(host);
-        ui = { master: master.input, game: game.input, info, status, host, entry, panel, close, values };
+        ui = { master: master.input, game: game.input, world, info, status, host, entry, panel, close, values };
         master.input.addEventListener('change', () => {
             const ctx = context();
             const existing = ctx.extensionSettings[KEY];
@@ -191,16 +231,18 @@
             refresh();
         });
         game.input.addEventListener('change', changeGame);
+        world.addEventListener('change', changeWorld);
         entry.addEventListener('click', openPanel);
         close.addEventListener('click', () => closePanel(true));
         panel.addEventListener('keydown', event => {
             if (event.key === 'Escape') { event.stopPropagation(); closePanel(true); }
         });
         refresh();
+        return migrateCurrent();
     }
 
     if (typeof globalThis.SillyTavern?.getContext !== 'function') {
-        console.error('[青禾记 Tavern] 需要 SillyTavern UI Extension 环境。');
+        console.error('[酒馆人生模拟器] 需要 SillyTavern UI Extension 环境。');
         return;
     }
     const ctx = context();
@@ -208,7 +250,7 @@
     if (!ctx.eventSource?.on || !events?.APP_INITIALIZED || !events?.CHAT_CHANGED
         || !isObject(ctx.extensionSettings) || typeof ctx.saveMetadata !== 'function'
         || typeof ctx.saveSettingsDebounced !== 'function') {
-        console.error('[青禾记 Tavern] 缺少必要的 Context API，请使用 SillyTavern 1.18.0。');
+        console.error('[酒馆人生模拟器] 缺少必要的 Context API，请使用 SillyTavern 1.18.0。');
         return;
     }
     ctx.eventSource.on(events.CHAT_CHANGED, () => {
@@ -216,6 +258,7 @@
             closePanel();
             ui.status.textContent = '已切换聊天，游戏状态来自当前聊天。';
             refresh();
+            return migrateCurrent();
         }
     });
     ctx.eventSource.on(events.APP_INITIALIZED, initialize);
