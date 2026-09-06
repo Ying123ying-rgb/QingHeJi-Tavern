@@ -1,6 +1,7 @@
 import { worldTemplates } from './data/world-templates.js';
 import { readState, needsMigration, isObject, getTemplate, addActor, selectActor, deleteActor, changeCurrency, resetWorld } from './core/game-state.js';
 import { currentCharacter, currentUser } from './core/actor-sources.js';
+import { mountFloatingPanel } from './ui/floating-panel.js';
 
 (() => {
     'use strict';
@@ -51,9 +52,30 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
     }
 
     function closePanel(focus = false) {
-        ui.panel.hidden = true;
-        ui.entry.setAttribute('aria-expanded', 'false');
-        if (focus && !ui.host.hidden) ui.entry.focus();
+        ui?.closeFloating?.(focus);
+    }
+
+    function mount() {
+        if (ui.mounted) return;
+        const view = mountFloatingPanel(ui.chat, ui.status, {
+            open: openPanel, close: closePanel, world: changeWorld, add: addPerson,
+            currency: delta => editActor(game => changeCurrency(game, delta)),
+            selectActor: id => editActor(game => selectActor(game, id)),
+        });
+        Object.assign(ui, view); ui.viewKeys = Object.keys(view); ui.mounted = true;
+        const unknown = element('option', '未识别模板（可重新选择）');
+        unknown.value = ''; unknown.disabled = true; unknown.hidden = true; ui.world.append(unknown);
+        for (const template of worldTemplates) {
+            const option = element('option', template.displayName); option.value = template.id; ui.world.append(option);
+        }
+    }
+
+    function unmount() {
+        if (!ui.mounted) return;
+        ui.actorController?.abort(); ui.actorController = undefined;
+        ui.destroyFloating();
+        for (const key of ui.viewKeys) delete ui[key];
+        ui.viewKeys = []; ui.mounted = false;
     }
 
     function refresh() {
@@ -67,11 +89,14 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
         ui.game.checked = info.valid && game.enabled;
         ui.master.disabled = busy;
         ui.game.disabled = busy || !pluginEnabled(ctx) || !info.valid || !isObject(ctx.chatMetadata);
+        if (!pluginEnabled(ctx)) { unmount(); return; }
+        mount();
         ui.world.disabled = ui.game.disabled;
         ui.world.value = getTemplate(game.world.templateId) ? game.world.templateId : '';
         renderActors(ctx, game);
         ui.info.textContent = `角色：${info.name}；characterId：${ctx.characterId ?? '无'}；聊天标识：${info.chatId ?? '无'}`;
         ui.host.hidden = !pluginEnabled(ctx) || !info.valid || !game.enabled;
+        ui.positionFloating();
         if (ui.host.hidden) closePanel();
         else if (!ui.panel.hidden) renderPanel(ctx, game);
     }
@@ -155,7 +180,7 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
         const node = element('button', label, 'menu_button qhjt-button');
         node.type = 'button';
         if (id) node.id = id;
-        node.addEventListener('click', handler);
+        node.addEventListener('click', handler, { signal: ui.actorController.signal });
         return node;
     }
 
@@ -169,14 +194,14 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
         return persist(ctx, game);
     }
 
-    function addPerson(type) {
+    async function addPerson(type) {
         const ctx = context();
         if (!canEdit(ctx) || !getTemplate(state(ctx).world.templateId)) { refresh(); return; }
         let descriptor;
         if (type === 'character') descriptor = currentCharacter(ctx);
         else if (type === 'user') descriptor = currentUser(ctx);
         else {
-            const name = globalThis.prompt('人物名称');
+            const name = await ui.requestName('人物名称');
             if (name === null || !name.trim()) return;
             descriptor = { name: name.trim(), sourceType: 'custom', sourceId: null };
         }
@@ -194,16 +219,17 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
         return editActor(game => deleteActor(game, id), expected);
     }
 
-    function renameUser(id, expected) {
+    async function renameUser(id, expected) {
         if (context().chatMetadata !== expected.chatMetadata || !canEdit(context())) return;
         const actor = state(context()).actors[id];
         if (actor?.sourceType !== 'user') return;
-        const name = globalThis.prompt('玩家显示名称（仅当前聊天模拟人物）', actor.name);
+        const name = await ui.requestName('玩家显示名称（仅当前聊天模拟人物）', actor.name);
         if (name === null || !name.trim()) return;
         return editActor(game => { if (!game.actors[id]) return false; game.actors[id].name = name.trim(); }, expected);
     }
 
     function renderActors(ctx, game) {
+        ui.actorController?.abort(); ui.actorController = new AbortController();
         const disabled = ui.game.disabled;
         const actors = Object.values(game.actors);
         ui.active.replaceChildren();
@@ -216,7 +242,7 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
             const row = element('div', undefined, 'qhjt-actor-row');
             const label = element('span', `${actor.id === game.activeActorId ? '●' : '○'} ${actor.name}`, 'qhjt-actor-name');
             label.title = actor.name;
-            const source = { character: '当前角色卡来源', user: '玩家', custom: '自定义人物' }[actor.sourceType] ?? '其他来源';
+            const source = { character: '角色卡', user: '玩家', custom: '自定义' }[actor.sourceType] ?? '其他来源';
             const actions = element('div', undefined, 'qhjt-actions');
             const activate = button('切换为当前主角', () => editActor(value => selectActor(value, actor.id), ctx));
             const remove = button('删除', () => removePerson(actor.id, ctx));
@@ -244,9 +270,8 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
     function renderPanel(ctx, game) {
         const actor = game.actors[game.activeActorId];
         rows(ui.values, [
-            ['当前世界', getTemplate(game.world.templateId)?.displayName ?? game.world.templateId],
+            ['世界', getTemplate(game.world.templateId)?.displayName ?? game.world.templateId],
             ['当前主角', actor?.name ?? '尚未添加人物'],
-            ['当前角色卡', identity(ctx).name],
         ]);
         rows(ui.worldValues, [
             [game.calendar.dateLabel, game.calendar.date],
@@ -255,16 +280,14 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
         rows(ui.actorValues, actor ? [
             [actor.currency.label, `${actor.currency.symbol}${actor.currency.amount}`],
             ...actor.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
-        ] : [['提示', '请在扩展设置中添加人物。']]);
+        ] : [['提示', '请在「人物」页添加人物。']]);
     }
 
     function openPanel() {
         refresh();
-        if (ui.host.hidden) return;
+        if (!ui.mounted || ui.host.hidden) return;
         renderPanel(context(), state(context()));
-        ui.panel.hidden = false;
-        ui.entry.setAttribute('aria-expanded', 'true');
-        ui.close.focus();
+        ui.openFloating();
     }
 
     function initialize() {
@@ -279,64 +302,12 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
         settings.id = 'qhjt-settings';
         const master = toggle('插件总开关', 'qhjt-master');
         const game = toggle('当前聊天启用游戏模式', 'qhjt-game');
-        const worldLabel = element('label', '当前聊天世界模板：', 'qhjt-world-label');
-        worldLabel.htmlFor = 'qhjt-world';
-        const world = element('select', undefined, 'qhjt-world');
-        world.id = 'qhjt-world';
-        const unknown = element('option', '未识别模板（可重新选择）');
-        unknown.value = ''; unknown.disabled = true; unknown.hidden = true;
-        world.append(unknown);
-        for (const template of worldTemplates) {
-            const option = element('option', template.displayName);
-            option.value = template.id;
-            world.append(option);
-        }
-        const info = element('p', undefined, 'qhjt-info');
-        const status = element('p', '游戏模式默认关闭；请先选择聊天。', 'qhjt-info');
+        const status = element('p', '', 'qhjt-info');
         status.setAttribute('role', 'status');
-        settings.append(element('h3', '酒馆人生模拟器'), master.label, game.label, worldLabel, world, info, status);
-        const activeLabel = element('label', '当前主角：', 'qhjt-world-label');
-        activeLabel.htmlFor = 'qhjt-active';
-        const active = element('select', undefined, 'qhjt-world'); active.id = 'qhjt-active';
-        const addCharacter = button('添加当前角色', () => addPerson('character'), 'qhjt-add-character');
-        const addUser = button('添加“我”', () => addPerson('user'), 'qhjt-add-user');
-        const addCustom = button('添加自定义人物', () => addPerson('custom'), 'qhjt-add-custom');
-        const addButtons = element('div', undefined, 'qhjt-actions'); addButtons.append(addCharacter, addUser, addCustom);
-        const actorList = element('div'); actorList.id = 'qhjt-actors';
-        settings.append(element('h3', '人物'), activeLabel, active, addButtons, actorList);
-
-        const host = element('section', undefined, 'qhjt-host');
-        host.id = 'qhjt-host';
-        host.hidden = true;
-        const entry = element('button', '人生模拟', 'menu_button qhjt-button');
-        entry.type = 'button';
-        entry.setAttribute('aria-controls', 'qhjt-panel');
-        entry.setAttribute('aria-expanded', 'false');
-        const panel = element('section', undefined, 'qhjt-panel');
-        panel.id = 'qhjt-panel';
-        panel.hidden = true;
-        panel.setAttribute('aria-labelledby', 'qhjt-title');
-        const header = element('div', undefined, 'qhjt-panel-header');
-        const title = element('h3', '酒馆人生模拟器 v0.1.2');
-        title.id = 'qhjt-title';
-        const close = element('button', '关闭', 'menu_button qhjt-button');
-        close.type = 'button';
-        const values = element('dl', undefined, 'qhjt-values');
-        values.id = 'qhjt-summary';
-        const worldValues = element('dl', undefined, 'qhjt-values'); worldValues.id = 'qhjt-world-values';
-        const actorValues = element('dl', undefined, 'qhjt-values'); actorValues.id = 'qhjt-actor-values';
-        const plus = button('货币 +100', () => editActor(game => changeCurrency(game, 100)), 'qhjt-plus');
-        const minus = button('货币 -100', () => editActor(game => changeCurrency(game, -100)), 'qhjt-minus');
-        const testButtons = element('div', undefined, 'qhjt-actions'); testButtons.append(plus, minus);
-        header.append(title, close);
-        panel.append(header, values, element('h3', '世界状态'), worldValues, element('h3', '人物状态'), actorValues,
-            element('h3', '测试修改'), testButtons);
-        host.append(entry, panel);
+        settings.append(element('h3', '酒馆人生模拟器'), master.label, game.label,
+            element('p', '开启后，请在聊天页面点击『人生』悬浮按钮进入模拟器。', 'qhjt-info'));
         settingsRoot.append(settings);
-        // Sibling of #chat: core message rerenders cannot remove our entry.
-        chat.after(host);
-        ui = { master: master.input, game: game.input, world, info, status, host, entry, panel, close, values,
-            active, actorList, addCharacter, addUser, addCustom, worldValues, actorValues, plus, minus };
+        ui = { master: master.input, game: game.input, status, chat, mounted: false };
         master.input.addEventListener('change', () => {
             const ctx = context();
             const existing = ctx.extensionSettings[KEY];
@@ -346,13 +317,6 @@ import { currentCharacter, currentUser } from './core/actor-sources.js';
             refresh();
         });
         game.input.addEventListener('change', changeGame);
-        world.addEventListener('change', changeWorld);
-        active.addEventListener('change', () => { const id = active.value; return editActor(game => selectActor(game, id)); });
-        entry.addEventListener('click', openPanel);
-        close.addEventListener('click', () => closePanel(true));
-        panel.addEventListener('keydown', event => {
-            if (event.key === 'Escape') { event.stopPropagation(); closePanel(true); }
-        });
         refresh();
         return migrateCurrent();
     }

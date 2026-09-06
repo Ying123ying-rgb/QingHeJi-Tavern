@@ -9,7 +9,7 @@ if (!vm.SourceTextModule) {
 }
 const root = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-assert.equal(manifest.version, '0.1.2');
+assert.equal(manifest.version, '0.1.3');
 assert.equal(manifest.display_name, '酒馆人生模拟器');
 assert.equal(manifest.minimum_client_version, '1.18.0');
 assert.equal(manifest.loading_order, 100);
@@ -21,19 +21,30 @@ const plain = value => JSON.parse(JSON.stringify(value));
 const equal = (a, b) => assert.deepEqual(plain(a), plain(b));
 const freeze = value => { if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };
 class Node {
-    constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.attributes = {}; this.hidden = false; }
-    append(...nodes) { this.children.push(...nodes); nodes.forEach(node => { node.parentElement = this; }); }
+    constructor(tag) { this.tag = tag; this.children = []; this.events = {}; this.attributes = {}; this.style = {}; this.hidden = false; this.open = false; }
+    append(...nodes) { for (const node of nodes) { node.remove(); this.children.push(node); node.parentElement = this; } }
     after(node) { this.parentElement.append(node); }
     setAttribute(key, value) { this.attributes[key] = value; }
-    addEventListener(name, handler) { this.events[name] = handler; }
-    replaceChildren(...nodes) { this.children = []; this.append(...nodes); }
+    addEventListener(name, handler, options) {
+        this.events[name] = handler;
+        options?.signal?.addEventListener('abort', () => { if (this.events[name] === handler) delete this.events[name]; }, { once: true });
+    }
+    replaceChildren(...nodes) { for (const child of [...this.children]) child.remove(); this.append(...nodes); }
+    remove() { if (this.parentElement) { this.parentElement.children = this.parentElement.children.filter(child => child !== this); this.parentElement = null; } }
+    get isConnected() { return this.tag === 'html' || Boolean(this.parentElement?.isConnected); }
+    getBoundingClientRect() { return { top: this.id === 'form_sheld' ? 650 : 0, bottom: 650, right: 320 }; }
+    showModal() { this.open = true; }
+    close() { this.open = false; }
+    scrollIntoView() {}
     focus() {}
 }
 const nodes = [];
 const create = tag => { const node = new Node(tag); nodes.push(node); return node; };
+const html = create('html'), body = create('body'); html.append(body);
 const settings = create('div'); settings.id = 'extensions_settings2';
 const shell = create('div'); const chatNode = create('div'); chatNode.id = 'chat'; shell.append(chatNode);
-const get = id => nodes.find(node => node.id === id);
+body.append(settings, shell);
+const get = id => nodes.find(node => node.id === id && node.isConnected);
 const listeners = {};
 const KEY = 'qingheji_tavern';
 let metadata = {}, chatId = 'A', characterId = 0, groupId;
@@ -51,7 +62,9 @@ const ctx = () => ({ characterId, characters, groupId, name1: '玩家名称', ch
     eventTypes: { APP_INITIALIZED: 'init', CHAT_CHANGED: 'chat' },
     eventSource: { on: (name, handler) => { listeners[name] = handler; } },
 });
-const sandbox = vm.createContext({ SillyTavern: { getContext: ctx }, document: { createElement: create, getElementById: get },
+const windowEvents = new Node('window');
+const sandbox = vm.createContext({ SillyTavern: { getContext: ctx }, document: { createElement: create, getElementById: get, body, documentElement: html },
+    AbortController, innerHeight: 740, innerWidth: 320, addEventListener: windowEvents.addEventListener.bind(windowEvents),
     console: { error() {} },
     confirm: message => { confirmations.push(message); onConfirm(); return confirmed; },
     prompt: () => { onPrompt(); return prompted; },
@@ -115,7 +128,18 @@ async function run() {
     assert.equal(JSON.stringify(worldTemplates), templateSnapshot);
     await listeners.init(); await listeners.init();
     assert.equal(nodes.filter(node => node.id === 'qhjt-settings').length, 1);
-    const click = async id => { assert(!get(id).disabled, id); await get(id).events.click(); };
+    const answerName = () => {
+        if (get('qhjt-name-form')?.hidden !== false) return;
+        onPrompt();
+        if (get('qhjt-name-form')?.hidden !== false) return;
+        if (prompted === null) get('qhjt-name-cancel').events.click();
+        else {
+            get('qhjt-name').value = prompted;
+            get('qhjt-name-form').events.submit({ preventDefault() {} });
+            if (!prompted.trim()) get('qhjt-name-cancel').events.click();
+        }
+    };
+    const click = async id => { assert(!get(id).disabled, id); const pending = get(id).events.click(); answerName(); await pending; };
     const choose = async (id, value) => { get(id).value = value; await get(id).events.change(); };
     const game = () => metadata[KEY];
     const switchChat = async (id, data) => { chatId = id; metadata = data; await listeners.chat(); };
@@ -125,8 +149,25 @@ async function run() {
         return result;
     };
     assert.equal(saves, 0); assert.equal(get('qhjt-game').checked, false);
+    assert.equal(get('qhjt-host').hidden, true);
+    assert.equal(get('qhjt-settings').children.length, 4); // heading, two switches, short help only
+    assert.equal(get('qhjt-world').parentElement.id, 'qhjt-page-world');
+    assert.equal(get('qhjt-active').parentElement.id, 'qhjt-page-actors');
     get('qhjt-game').checked = true; await get('qhjt-game').events.change();
-    get('qhjt-host').children[0].events.click();
+    assert.equal(get('qhjt-entry').textContent, '人生');
+    assert.equal(get('qhjt-host').hidden, false);
+    await click('qhjt-entry');
+    assert.equal(get('qhjt-overlay').open, true);
+    assert.equal(chatNode.style.overflow, 'hidden');
+    await click('qhjt-close'); assert.equal(get('qhjt-overlay').open, false);
+    assert.equal(chatNode.style.overflow, undefined);
+    await click('qhjt-entry');
+    get('qhjt-overlay').events.click({ target: get('qhjt-overlay') });
+    assert.equal(get('qhjt-overlay').open, false);
+    await click('qhjt-entry');
+    await click('qhjt-tab-actors'); assert.equal(get('qhjt-page-actors').hidden, false);
+    assert.equal(get('qhjt-page-state').hidden, true);
+    await click('qhjt-tab-state');
     assert.equal(get('qhjt-panel').hidden, false);
     assert.equal(rowValues('qhjt-summary')['当前主角'], '尚未添加人物');
     assert.equal(get('qhjt-plus').disabled, true);
@@ -139,7 +180,7 @@ async function run() {
     await choose('qhjt-active', ids[1]);
     assert.equal(game().actors[ids[1]].currency.amount, 1000);
     assert.equal(rowValues('qhjt-summary')['当前主角'], '玩家名称');
-    assert.equal(rowValues('qhjt-summary')['当前角色卡'], '<砚绒>');
+    assert.equal(rowValues('qhjt-summary')['当前角色卡'], undefined);
     assert.equal(rowValues('qhjt-actor-values')['余额'], '¥1000');
     equal(game().calendar, sharedCalendar); assert.equal(chatId, 'A');
     await choose('qhjt-active', ids[0]);
@@ -148,12 +189,14 @@ async function run() {
     await click('qhjt-add-character'); assert.equal(Object.keys(game().actors).length, 3);
     // Only player display name is editable; the host's name1 and card remain untouched.
     prompted = '我自己';
-    await get('qhjt-actors').children[1].children[2].children[2].events.click();
+    const renaming = get('qhjt-actors').children[1].children[2].children[2].events.click(); answerName(); await renaming;
     assert.equal(game().actors[ids[1]].name, '我自己'); assert.equal(ctx().name1, '玩家名称');
     prompted = null; await click('qhjt-add-custom');
     prompted = '   '; await click('qhjt-add-custom'); assert.equal(Object.keys(game().actors).length, 3);
     const aChat = metadata;
     await switchChat('B', {});
+    assert.equal(get('qhjt-host').hidden, true);
+    assert.equal(get('qhjt-overlay').open, false);
     await choose('qhjt-world', 'sci_fi'); await click('qhjt-add-user');
     const bChat = metadata;
     await switchChat('A', aChat); assert.equal(game().world.templateId, 'modern_city');
@@ -236,12 +279,17 @@ async function run() {
     await get('qhjt-actors').children[0].children[2].children[1].events.click();
     equal(bChat, beforeOtherDelete); onConfirm = () => {};
     const staleButton = get('qhjt-actors').children[0].children[2].children[1];
-    await switchChat('empty', {}); await staleButton.events.click(); assert.equal(game(), undefined);
+    await switchChat('empty', {}); await staleButton.events.click?.(); assert.equal(game(), undefined);
     prompted = '不应添加'; onPrompt = () => { chatId = 'other'; metadata = {}; listeners.chat(); };
     await click('qhjt-add-custom'); assert.equal(game(), undefined); onPrompt = () => {};
     get('qhjt-master').checked = false; await get('qhjt-master').events.change();
-    assert.equal(get('qhjt-host').hidden, true); assert.equal(get('qhjt-add-user').disabled, true); assert.equal(settingSaves, 1);
+    assert.equal(get('qhjt-host'), undefined); assert.equal(get('qhjt-overlay'), undefined); assert.equal(settingSaves, 1);
+    assert.equal(windowEvents.events.resize, undefined);
+    assert.equal(chatNode.style.overflow, undefined);
     get('qhjt-master').checked = true; await get('qhjt-master').events.change();
+    for (const id of ['qhjt-entry', 'qhjt-overlay', 'qhjt-panel']) {
+        assert.equal(nodes.filter(node => node.id === id && node.isConnected).length, 1);
+    }
     await switchChat(undefined, {}); assert.equal(get('qhjt-game').disabled, true);
     assert.equal(JSON.stringify(card), originalCard); assert.equal(JSON.stringify(chat), originalChat);
     assert.equal(JSON.stringify(worldTemplates), templateSnapshot);
