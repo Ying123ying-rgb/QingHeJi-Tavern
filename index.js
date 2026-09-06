@@ -3,6 +3,9 @@ import { readState, needsMigration, isObject, getTemplate, addActor, inspectActo
 import { currentCharacter, currentUser } from './core/actor-sources.js';
 import { mountFloatingPanel } from './ui/floating-panel.js';
 import { addAction, removeAction, listActions, findAction } from './core/actions.js';
+import { applyWorldDelta, validateDiscovery, undoLatestDiscovery, worldId, discoveredLocations, actionsAtLocation } from './core/world-discovery.js';
+import { extractDiscoveryCandidates } from './core/discovery-provider.js';
+import { createDiscoverySession } from './ui/discovery-session.js';
 
 (() => {
     'use strict';
@@ -13,6 +16,8 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
     let busy = false;
     let renderedMetadata;
     let renderedIdentity;
+    let discoverySession;
+    let inspectedLocationId = null;
     const migrationAttempts = new WeakSet();
 
     function identity(ctx) {
@@ -63,6 +68,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
         unmount();
         const view = mountFloatingPanel(ui.status, {
             open: openPanel, close: closePanel, world: changeWorld, add: addPerson,
+            update, addLocation: addPlace, undoDiscovery: undoDiscovery,
             addAction: async () => {
                 const expected = context();
                 const name = await ui.requestName('行动名称', '', 'actions');
@@ -104,6 +110,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
         ui.world.value = getTemplate(game.world.templateId) ? game.world.templateId : '';
         renderActors(ctx, game);
         renderActions(ctx, game);
+        renderLocations(ctx, game);
         ui.info.textContent = `角色：${info.name}；characterId：${ctx.characterId ?? '无'}；聊天标识：${info.chatId ?? '无'}`;
         ui.host.hidden = !pluginEnabled(ctx) || !info.valid || !game.enabled;
         ui.positionFloating();
@@ -153,6 +160,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
             refresh();
             // A chat selected during a pending save may also need migration.
             await migrateCurrent();
+            await discoverySession?.flush();
         }
         return saved;
     }
@@ -167,7 +175,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
         const ctx = context();
         if (!canEdit(ctx) || !state(ctx).enabled || ctx.chatMetadata !== expected.chatMetadata
             || identity(ctx).key !== identity(expected).key) return notice('请在当前聊天开启游戏模式，等待保存完成后重试。');
-        const next = state(ctx);
+        let next = state(ctx);
         if (operation === 'remove') {
             const action = findAction(next, name);
             if (!action) return notice('当前聊天没有该行动。');
@@ -176,6 +184,8 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
         }
         try {
             const action = operation === 'add' ? addAction(next, name) : removeAction(next, name);
+            if (operation === 'add') next = applyWorldDelta(state(ctx), { actionsToAdd: [action] });
+            else next.discoveryLog.push({ type: 'action_removed', label: action.label, source: 'user', timestamp: new Date().toISOString() });
             const saved = await persist(ctx, next);
             if (context().chatMetadata !== ctx.chatMetadata || identity(context()).key !== identity(ctx).key) return '';
             return notice(saved ? `已${operation === 'add' ? '添加' : '移除'}行动“${action.label}”。` : '行动保存失败，请重试。');
@@ -184,10 +194,10 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
 
     function renderActions(ctx, game) {
         ui.actionList.replaceChildren();
-        const actions = listActions(game);
-        if (!actions.length) ui.actionList.append(element('p', '当前聊天尚未解锁自定义行动。'));
+        const actions = ui.actionScope.value === 'all' ? listActions(game) : actionsAtLocation(game, resolveControlledActor(game, ctx)?.locationId);
+        if (!actions.length) ui.actionList.append(element('p', listActions(game).length ? '当前位置暂无行动，可查看“全部行动”。' : '当前聊天尚未解锁自定义行动。'));
         for (const action of actions) {
-            const row = element('div', undefined, 'qhjt-actions');
+            const row = element('div', undefined, 'qhjt-card qhjt-action-card');
             const launch = button(action.label, () => notice('该行动尚未配置执行逻辑。'));
             launch.disabled = action.enabled === false || ui.game.disabled;
             const remove = button('删除', () => editAction('remove', action.label, ctx));
@@ -195,6 +205,112 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
             row.append(launch, remove); ui.actionList.append(row);
         }
         ui.addAction.disabled = ui.game.disabled;
+    }
+
+    async function editWorld(delta, expected = context()) {
+        const ctx = context();
+        if (!canEdit(ctx) || !state(ctx).enabled || ctx.chatMetadata !== expected.chatMetadata || identity(ctx).key !== identity(expected).key) {
+            notice('聊天已切换或正在保存，操作已取消。'); return;
+        }
+        try {
+            const next = applyWorldDelta(state(ctx), delta, { source: 'user' });
+            const saved = await persist(ctx, next);
+            if (context().chatMetadata === ctx.chatMetadata) notice(saved ? '当前聊天的世界知识已保存。' : '保存失败，请重试。');
+        } catch (error) { notice(error.message); }
+    }
+
+    async function addPlace() {
+        const expected = context();
+        if (!canEdit(expected) || !state(expected).enabled) return;
+        const value = await ui.requestName('地点名', '', 'locations', '简介（选填）');
+        if (!value) return;
+        const game = state(expected);
+        if (Object.values(game.locations).some(location => location.label === value.name)) { notice('当前聊天已有同名地点。'); return; }
+        await editWorld({ locationsToAdd: [{ label: value.name, description: value.extra, discovered: true }] }, expected);
+    }
+
+    async function addKnowledge(id, field, expected) {
+        const labels = { capabilities: '功能名称', resources: '资源名称', services: '服务名称' };
+        const name = await ui.requestName(labels[field], '', 'locations');
+        if (name === null) return;
+        const type = { capabilities: 'capability', resources: 'resource', services: 'service' }[field];
+        await editWorld({ locationsToUpdate: [{ id, [field]: [{ id: worldId(type, name), label: name }] }] }, expected);
+    }
+
+    async function undoDiscovery() {
+        const ctx = context();
+        if (!canEdit(ctx) || !state(ctx).enabled) return;
+        try {
+            const before = state(ctx);
+            const target = [...before.discoveryLog].reverse().find(entry => ['auto', 'secondary_ai'].includes(entry.source) && !entry.undoneAt && entry.undo?.patches?.length);
+            const next = undoLatestDiscovery(before);
+            const result = next.discoveryLog.find(entry => entry.id === target.id).undoResult;
+            const saved = await persist(ctx, next);
+            if (context().chatMetadata === ctx.chatMetadata) notice(saved
+                ? `已撤销 ${result.reverted} 项自动改动；保留 ${result.skipped} 项后续修改或关联数据。` : '撤销保存失败。');
+        } catch (error) { notice(error.message); }
+    }
+
+    function renderLocations(ctx, game) {
+        const actor = resolveControlledActor(game, ctx);
+        ui.locationCurrent.textContent = `当前所在：${game.locations[actor?.locationId]?.label ?? '未知'}`;
+        ui.locationList.replaceChildren();
+        const locations = discoveredLocations(game);
+        if (!locations.length) ui.locationList.append(element('p', '当前聊天尚未发现地点。'));
+        for (const location of locations) {
+            const view = button(location.label, () => {
+                if (!canEdit(context()) || context().chatMetadata !== ctx.chatMetadata || identity(context()).key !== identity(ctx).key) return;
+                inspectedLocationId = location.id; ui.locationDetail.hidden = false; update();
+                ui.locationDetail.scrollIntoView({ block: 'nearest' });
+            }, `qhjt-location-${location.id}`);
+            view.disabled = ui.game.disabled; ui.locationList.append(view);
+        }
+        ui.addLocation.disabled = ui.game.disabled;
+        ui.locationDetail.replaceChildren();
+        const location = game.locations[inspectedLocationId];
+        if (!location || (!location.discovered && !location.visited)) ui.locationDetail.hidden = true;
+        if (location) {
+            ui.locationDetail.append(element('h3', location.label), element('p', location.description || '暂无简介。'));
+            const values = element('dl', undefined, 'qhjt-values');
+            const names = items => (items ?? []).map(item => typeof item === 'string' ? item : item.label ?? item.id).join('、') || '未知';
+            rows(values, [
+                ['地点状态', location.visited ? '已到达' : '已发现'],
+                ['已知功能', names(location.capabilities)],
+                ['已知资源', names((location.resources ?? []).filter(item => item.known !== false))],
+                ['已知服务', names(location.services)],
+            ]);
+            ui.locationDetail.append(values, element('h3', '可执行行动'));
+            const actionCards = element('div', undefined, 'qhjt-card-grid');
+            const available = actionsAtLocation(game, location.id);
+            if (!available.length) actionCards.append(element('p', '暂无已知行动。'));
+            for (const action of available) actionCards.append(button(action.label, () => notice('该行动尚未配置执行逻辑。')));
+            ui.locationDetail.append(actionCards);
+            const controls = element('div', undefined, 'qhjt-card-grid');
+            for (const [field, label] of [['capabilities', '＋添加功能'], ['resources', '＋添加资源'], ['services', '＋添加服务']]) {
+                const add = button(label, () => addKnowledge(location.id, field, ctx), `qhjt-add-${field}`);
+                add.disabled = ui.game.disabled; controls.append(add);
+            }
+            const place = button('设为当前人物所在', () => editWorld({ locationsToUpdate: [{ id: location.id, visited: true }], actorLocationChanges: [{ actorId: actor.id, locationId: location.id }] }, ctx), 'qhjt-set-location');
+            place.disabled = ui.game.disabled || !actor; controls.append(place);
+            ui.locationDetail.append(controls);
+            const caption = element('label', '选择已解锁行动', 'qhjt-label'); caption.htmlFor = 'qhjt-link-action';
+            const select = element('select'); select.id = 'qhjt-link-action';
+            for (const action of listActions(game)) {
+                const option = element('option', action.label); option.value = action.id; select.append(option);
+            }
+            const link = button('＋关联行动', () => editWorld({ locationsToUpdate: [{ id: location.id, actions: [select.value] }] }, ctx), 'qhjt-associate-action');
+            link.disabled = ui.game.disabled || !listActions(game).length;
+            ui.locationDetail.append(caption, select, link);
+        }
+        ui.discoveryLog.replaceChildren();
+        const recent = game.discoveryLog.slice(-50).reverse();
+        if (!recent.length) ui.discoveryLog.append(element('p', '暂无发现记录。'));
+        for (const entry of recent) {
+            const names = entry.discoveries?.map(item => item.label).join('、') || entry.label;
+            const source = { user: '手动', auto: '自动', secondary_ai: '自动分析' }[entry.source] ?? entry.source;
+            ui.discoveryLog.append(element('p', `${entry.timestamp} · ${source} · ${names}${entry.undoneAt ? '（已撤销）' : ''}`, 'qhjt-card'));
+        }
+        ui.undoDiscovery.disabled = ui.game.disabled || !game.discoveryLog.some(entry => ['auto', 'secondary_ai'].includes(entry.source) && !entry.undoneAt && entry.undo?.patches?.length);
     }
 
     function registerCommands(ctx) {
@@ -227,6 +343,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
     }
 
     async function changeGame() {
+        discoverySession?.cancel();
         const desired = ui.game.checked;
         const ctx = context();
         if (!canEdit(ctx)) { refresh(); return; }
@@ -374,11 +491,13 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
             [game.calendar.timeLabel, game.calendar.time],
         ]);
         rows(ui.actorValues, actor ? [
+            ['当前所在', game.locations[actor.locationId]?.label ?? '未知'],
             [actor.currency.label, `${actor.currency.symbol}${actor.currency.amount}`],
             ...actor.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
         ] : [['提示', '当前无可识别角色卡，可点击“切换到我”。']]);
         const inspected = game.actors[game.inspectedActorId];
         rows(ui.detailValues, inspected ? [
+            ['当前所在', game.locations[inspected.locationId]?.label ?? '未知'],
             ['正在查看', inspected.name], ['身份', inspected.id === resolveControlledActor(game, ctx)?.id ? '当前操作角色' : 'NPC（仅查看）'],
             [inspected.currency.label, `${inspected.currency.symbol}${inspected.currency.amount}`],
             ...inspected.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
@@ -407,6 +526,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
         settingsRoot?.append(settings);
         ui = { master: master.input, game: game.input, status, settings, mounted: false };
         master.input.addEventListener('change', () => {
+            discoverySession?.cancel();
             const ctx = context();
             const existing = ctx.extensionSettings[KEY];
             ctx.extensionSettings[KEY] = { ...(isObject(existing) ? existing : {}), enabled: master.input.checked };
@@ -432,6 +552,7 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
         return;
     }
     const chatChanged = () => {
+        discoverySession?.cancel(); inspectedLocationId = null;
         if (ui) {
             closePanel();
             ui.status.textContent = '已切换聊天，游戏状态来自当前聊天。';
@@ -441,6 +562,32 @@ import { addAction, removeAction, listActions, findAction } from './core/actions
     };
     for (const name of new Set([events.CHAT_CHANGED, events.CHARACTER_SELECTED, events.CHARACTER_EDITED].filter(Boolean))) ctx.eventSource.on(name, chatChanged);
     ctx.eventSource.on(events.APP_INITIALIZED, initialize);
+    discoverySession = createDiscoverySession({
+        context, identity, read: state, busy: () => busy,
+        enabled: ctx => Boolean(ui) && pluginEnabled(ctx) && identity(ctx).valid && state(ctx).enabled,
+        onError: error => notice(`自动发现未保存：${error.message}`),
+        scan: async ({ ctx: expected, turnId, messages }) => {
+            const snapshot = state(expected);
+            const actor = resolveControlledActor(snapshot, expected);
+            const candidate = await extractDiscoveryCandidates({ worldTemplate: getTemplate(snapshot.world.templateId),
+                locations: snapshot.locations, actions: snapshot.actions, controlledActor: actor, messages });
+            const current = context();
+            if (!canEdit(current) || !state(current).enabled || current.chatMetadata !== expected.chatMetadata || identity(current).key !== identity(expected).key) return;
+            const latest = state(current);
+            if (resolveControlledActor(latest, current)?.id !== actor?.id || latest.discoveryScan.lastTurnId === turnId) return;
+            const delta = validateDiscovery(candidate, latest, { source: 'auto' });
+            const next = applyWorldDelta(latest, delta, { source: 'auto', turnId });
+            next.discoveryScan.lastTurnId = turnId;
+            const count = next.discoveryLog.length - latest.discoveryLog.length;
+            if (await persist(current, next) && count && context().chatMetadata === current.chatMetadata) notice('已记录本轮明确的世界发现，可在设置中查看或撤销。');
+        },
+    });
+    if (events.GENERATION_AFTER_COMMANDS && events.MESSAGE_RECEIVED && events.GENERATION_ENDED) {
+        ctx.eventSource.on(events.GENERATION_AFTER_COMMANDS, (...args) => discoverySession.start(...args));
+        ctx.eventSource.on(events.MESSAGE_RECEIVED, id => discoverySession.received(id));
+        ctx.eventSource.on(events.GENERATION_ENDED, () => discoverySession.end());
+        if (events.GENERATION_STOPPED) ctx.eventSource.on(events.GENERATION_STOPPED, () => discoverySession.cancel());
+    }
     registerCommands(ctx);
     initialize(); // Also works when APP_INITIALIZED fired before extension loading.
     if (typeof MutationObserver === 'function') {

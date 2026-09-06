@@ -1,8 +1,8 @@
 # 酒馆人生模拟器 · QingHeJi-Tavern
 
-通用 SillyTavern 生活模拟游戏引擎，当前版本 **0.1.4（悬浮入口修复与每聊天 Action Registry）**。青禾记 / 古代田园只是第一个世界模板。仓库与目录仍为 `QingHeJi-Tavern`。
+通用 SillyTavern 生活模拟游戏引擎，当前版本 **0.2.0（动态地点与世界发现）**。青禾记 / 古代田园只是第一个世界模板。仓库与目录仍为 `QingHeJi-Tavern`。
 
-**状态、行动、人物和世界管理位于聊天悬浮游戏面板。** 本轮修复 Android 入口挂载与初始化，并加入每聊天独立的临时行动；延续原有控制模式及存档兼容。
+**状态、行动、地点、人物、设置位于聊天悬浮游戏面板。** 本轮新增每聊天地点、渐进资源/功能/服务知识、保守本地发现及自动发现撤销；世界模板选择移至设置。完整数据结构、规则及未来 provider 契约见 [动态世界发现文档](docs/discovery.md)。
 
 本版结构：**一个聊天世界 + 默认跟随当前角色卡 / 一键切换 User + 可查看的 NPC**。每个聊天独立保存，SillyTavern 当前聊天角色与模拟游戏当前操作角色相互解耦。点击人物仅查看详情，不转移控制权，也不切换聊天。
 
@@ -21,10 +21,12 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
 5. 「人物」页可添加自定义 NPC、点击名称查看只读详情。这里没有切换控制按钮，查看与关闭详情都不改变操作对象。
 6. 「状态」页分别显示世界日期时间与当前操作角色的货币、stats。货币 +100 / -100 只作用于当前操作角色，即使正在查看其他 NPC。允许负数，仅为测试工具。
 7. 删除 NPC 需要确认；当前操作角色不显示删除按钮。删除正在查看的 NPC 后，查看指针回到操作角色。
+8. 「地点」页手动添加地点及选填简介；详情可逐步添加功能、资源、服务、关联已有行动，并设置当前人物所在。
+9. 正常一轮聊天完整结束后，本地规则尝试识别明确事实；设置页查看发现记录和撤销最近自动发现。复杂、含糊或带引用/计划等语气的消息会跳过。
 
 ## 悬浮面板与生命周期
 
-- 五页签：状态、行动、人物、世界、设置。设置页只显示游戏模式及 AI设置/显示设置/存档管理的未来占位，没有这些功能。技术信息在最下面默认收起的「调试信息」中。
+- 五页签：状态、行动、地点、人物、设置。设置页包含世界模板、发现记录及撤销入口，保留未来设置占位。技术信息在默认收起的「调试信息」中。
 - 手机是底部抽屉，最大高度约可视区域的 88%，桌面宽屏居中。关闭按钮、遮罩点击或 Escape 均可关闭；没有打开浏览器窗口。
 - 入口宿主和遮罩面板直接挂到 `document.body`，不依赖设置区或聊天内部容器。入口使用 fixed 和 z-index 100，位于手机右侧、输入区上方约 100px；输入区不存在时使用可视窗口底边定位，狭小视口内钳制位置而不隐藏。
 - 页面内原生 `dialog.showModal()` 管理遮罩、焦点和背景不可交互；后打开的宿主原生弹窗仍在上层。参照 [SillyTavern 1.18.0 自身弹窗实现](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/popup.js)，未导入内部弹窗代码。
@@ -38,6 +40,8 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
 
 「行动」页为空时显示“当前聊天尚未解锁自定义行动。”，点击「＋添加行动」输入名称即可立即刷新。名称去除首尾空白、合并连续空白并标准化，同名（含英文字母大小写）不能重复。ID 根据标准化名称编码生成，保存后保持稳定。每项有删除按钮，确认后只从当前聊天移除；点击行动只提示“该行动尚未配置执行逻辑。”
 
+默认显示当前操作人物所在地可用的行动，可切换“全部行动”。`action.locationIds: []` 表示不限定地点；地点详情关联行动会同步双向引用。行动卡采用最小约 120px 的响应式 grid，名称和删除按钮各占卡片整行。
+
 也可在聊天输入框执行以下本地指令，需开启插件及当前聊天游戏模式：
 
 ```text
@@ -46,11 +50,11 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
 /life action list
 ```
 
-通过公开 Context 的 SlashCommandParser.addCommandObject / SlashCommand.fromProps 注册，旧宿主回退 registerSlashCommand。依据：[官方扩展指令文档](https://docs.sillytavern.app/for-contributors/writing-extensions/)及 [1.18.0 Context 导出](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js)。指令返回空管道值，用简短本地提示反馈；删除同样需要确认。不发送消息或请求 AI。缺少指令 API 时提示改用行动页，不监听自然语言。
+通过公开 Context 的 SlashCommandParser.addCommandObject / SlashCommand.fromProps 注册，旧宿主回退 registerSlashCommand。依据：[官方扩展指令文档](https://docs.sillytavern.app/for-contributors/writing-extensions/)及 [1.18.0 Context 导出](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js)。指令返回空管道值，用简短本地提示反馈；删除同样需要确认。不发送消息或请求 AI。缺少指令 API 时提示改用行动页，不通过监听普通输入文本实现指令。
 
 每聊天存档新增 `actions: {}`，全局设置没有 actions。temporary 表示用户临时定义的行动，仍随该聊天保存并在刷新后保留；新聊天为空。示例名称只属于用户输入，核心只处理通用 Action。
 
-每项初始字段为 id、label、enabled: true、temporary: true、source: 'user'、metadata: {}。未来 duration、costs、requirements、effects、location、cooldown、aiRoute、handler 等字段原样保留，本版不解释或执行。旧存档自动补空 actions，已有 world、actors、controlMode、currency、stats、calendar 沿用原兼容逻辑；切换世界保留当前聊天行动。
+每项初始字段为 id、label、enabled: true、temporary: true、source: 'user'、locationIds: []、metadata: {}。未来 duration、costs、requirements、effects、location、cooldown、aiRoute、handler 等字段原样保留，本版不解释或执行。旧存档自动补空 actions，已有 world、actors、controlMode、currency、stats、calendar 沿用原兼容逻辑；切换世界保留当前聊天行动及地点知识。
 
 ## 人物来源与身份
 
@@ -89,6 +93,9 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
   "inspectedActorId": "actor_1",
   "nextActorNumber": 2,
   "actions": {},
+  "locations": {},
+  "discoveryLog": [],
+  "discoveryScan": {},
   "actors": {
     "actor_1": {
       "id": "actor_1",
@@ -103,7 +110,7 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
         { "id": "mood", "label": "心情", "value": 80, "max": 100 }
       ],
       "inventory": {}, "skills": {}, "relationships": {}, "personalState": {},
-      "location": null, "occupation": null, "schedule": [], "needs": {}, "memory": [], "flags": {}
+      "location": null, "locationId": null, "occupation": null, "schedule": [], "needs": {}, "memory": [], "flags": {}
     }
   }
 }
@@ -123,6 +130,8 @@ UI 遍历统一的 currency、calendar、stats，不根据古代/现代/星际�
 
 初始化及切换聊天时自动检测旧存档，转换为 schemaVersion 5 并请求保存：
 
+- v0.2.0 为增量扩展：缺少 locations/discoveryLog 时补空对象/数组；actor 缺少 locationId 时补 null，Action 缺少 locationIds 时补 []。原 actions/world/calendar/controlMode 及人物状态保持。新聊天不继承别的聊天地点。
+
 - v0.1 先沿用原迁移逻辑：归入古代田园，money → currency.amount，date/time → calendar，stamina/satiety 的 current/max → stats 的 value/max。
 - v0.1.1 无 actors、只有 currency/stats 的旧结构，保留 world/calendar/worldState，将 currency/stats/inventory/skills/relationships/personalState 放进一个新 actor。
 - 单人物旧存档优先采用当前角色的最小身份信息；不可读取时为自定义来源「默认人物」，原数据仍保留供查看。
@@ -137,11 +146,16 @@ UI 遍历统一的 currency、calendar、stats，不根据古代/现代/星际�
 
 ## 文件与加载兼容
 
-- `manifest.json`：0.1.4，最低 SillyTavern 1.18.0，加载顺序仍为 100。
+- `manifest.json`：0.2.0，最低 SillyTavern 1.18.0，加载顺序仍为 100。
 - `index.js`：现有 Context、人物管理和保存回调，精简设置及浮层挂载/更新/卸载。
 - `ui/floating-panel.js`：浮层 DOM、五页签、名称输入、滚动锁定、视口定位及清理；不处理存档。
 - `core/game-state.js`：世界/actor 初始化、角色/User 解析、只读查看指针、统一行动入口与旧存档迁移；不访问 DOM 或 SillyTavern。
 - `core/actions.js`：通用行动注册、查询及删除；不执行行动、不访问宿主。
+- `core/world-discovery.js`：地点结构、World Delta 校验/应用、双向关联、日志及选择性撤销。
+- `core/discovery-provider.js`：DiscoveryProvider 契约、LocalDiscoveryProvider 和未来副 API 任务常量。
+- `ui/discovery-session.js`：完整聊天轮次识别、事件顺序兼容、去重及取消。
+- `scripts/discovery-check.cjs`：由 check.cjs 运行的地点/发现/撤销/轮次测试。
+- `docs/discovery.md`：v0.2.0 数据及接口说明。
 - `core/actor-sources.js`：从公开 Context 提取最少身份信息。
 - `data/world-templates.js`：三个统一结构的只读模板，保持原定义。
 - `style.css`：手机 select、44px 按钮、长名字省略及可换行布局。
@@ -155,7 +169,7 @@ UI 遍历统一的 currency、calendar、stats，不根据古代/现代/星际�
 
 ## 验证和发布
 
-用户已确认 v0.1.2 的世界、人物与迁移通过 Android 实机测试。**本次 UI 重构尚未在 Android SillyTavern 实机验证。**
+用户已确认 v0.1.4 的世界、人物、聊天隔离、悬浮面板及行动注册表在 Android 实机正常。**v0.2.0 新增发现功能尚未在 Android SillyTavern 实机验证。**
 
 ```sh
 node scripts/check.cjs
@@ -172,10 +186,12 @@ Android 重点验收：首次自动显示当前角色；「切换到我 / 跟随
 
 新增测试覆盖行动 A/B 隔离、同名拒绝、新聊天空表、删除确认、失败回滚、扩展字段保留、本地指令及不修改聊天文本。浏览器覆盖缺少设置/聊天锚点时初始化、局部 DOM 重建恢复、普通变动不重复创建、刷新恢复行动及入口，以及长行动名称的 320px 布局。这些均为模拟宿主测试，未代替 Android 实机验收。
 
-本次创建提交 `Fix floating launcher and add per-chat action registry`。在项目普通 PowerShell 中发布本地提交：
+v0.2.0 新增测试覆盖手动地点与渐进知识、人物独立位置、地点/行动关联、传闻/计划/回忆/引用拒绝、明确到达、Provider 输入隔离、非法 Delta、自动撤销及手动数据保护、完整轮次扫描和流式事件逆序。浏览器测试覆盖地点表单/详情、筛选、自动发现/撤销、刷新保留和 320px 行动卡宽度。
+
+本次创建提交 `Add dynamic location and world discovery engine`。在项目普通 PowerShell 中发布本地提交：
 
 ```sh
 git push origin main
 ```
 
-不在 Codex 中 push。本轮仅修复入口并增加行动注册表，不开发副 API 或正式行动逻辑，完成后停止。
+不在 Codex 中 push。本轮仅建立动态地点与世界发现，不开发副 API 请求或正式行动逻辑，完成后停止。

@@ -9,7 +9,7 @@ if (!vm.SourceTextModule) {
 }
 const root = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-assert.equal(manifest.version, '0.1.4');
+assert.equal(manifest.version, '0.2.0');
 assert.equal(manifest.display_name, '酒馆人生模拟器');
 assert.equal(manifest.minimum_client_version, '1.18.0');
 assert.equal(manifest.loading_order, 100);
@@ -369,6 +369,10 @@ async function run() {
     await command('action add 无聊天'); assert.equal(game(), undefined);
     assert.equal(JSON.stringify(card), originalCard); assert.equal(JSON.stringify(chat), originalChat);
     assert.equal(JSON.stringify(worldTemplates), templateSnapshot);
+    await require('./discovery-check.cjs')(engine, registry,
+        modules.get(path.join(root, 'core/world-discovery.js')).namespace,
+        modules.get(path.join(root, 'core/discovery-provider.js')).namespace,
+        modules.get(path.join(root, 'ui/discovery-session.js')).namespace);
     console.log('PASS: character/user modes, automatic actors, chat following, independent states, NPC inspection, legacy player/active migration, templates, calendar, save rollback, syntax/paths and UI lifecycle.');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

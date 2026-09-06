@@ -45,7 +45,7 @@ export function mountFloatingPanel(status, handlers) {
         }
         scroll.scrollTop = 0;
     }
-    for (const [id, label] of [['state', '状态'], ['actions', '行动'], ['actors', '人物'], ['world', '世界'], ['settings', '设置']]) {
+    for (const [id, label] of [['state', '状态'], ['actions', '行动'], ['locations', '地点'], ['actors', '人物'], ['settings', '设置']]) {
         const page = node('section'); page.id = `qhjt-page-${id}`;
         page.setAttribute('role', 'tabpanel'); page.setAttribute('aria-labelledby', `qhjt-tab-${id}`);
         const tab = button(label, `qhjt-tab-${id}`, () => selectTab(id));
@@ -83,18 +83,21 @@ export function mountFloatingPanel(status, handlers) {
     const nameForm = node('form'); nameForm.id = 'qhjt-name-form'; nameForm.hidden = true;
     const nameLabel = node('label', '人物名称', 'qhjt-label'); nameLabel.htmlFor = 'qhjt-name';
     const nameInput = node('input'); nameInput.id = 'qhjt-name'; nameInput.type = 'text'; nameInput.required = true;
+    const extraLabel = node('label', '', 'qhjt-label'); extraLabel.htmlFor = 'qhjt-name-extra'; extraLabel.hidden = true;
+    const extraInput = node('input'); extraInput.id = 'qhjt-name-extra'; extraInput.type = 'text'; extraInput.hidden = true;
     const nameOk = button('确定', 'qhjt-name-ok', () => {}); nameOk.type = 'submit';
     const nameCancel = button('取消', 'qhjt-name-cancel', () => finishName(null));
     const nameActions = node('div', undefined, 'qhjt-actions'); nameActions.append(nameOk, nameCancel);
-    nameForm.append(nameLabel, nameInput, nameActions);
+    nameForm.append(nameLabel, nameInput, extraLabel, extraInput, nameActions);
     pages.actors.append(node('p', '点击人物名称查看状态。当前操作角色不会随查看对象改变。'), addButtons, nameForm, actorList, detail);
     let resolveName;
     function finishName(value) {
         nameForm.hidden = true;
         const resolve = resolveName; resolveName = undefined; resolve?.(value);
     }
-    function requestName(label, initial = '', page = 'actors') {
+    function requestName(label, initial = '', page = 'actors', extra = '') {
         finishName(null); pages[page].append(nameForm); selectTab(page);
+        extraLabel.textContent = extra; extraLabel.hidden = extraInput.hidden = !extra; extraInput.value = '';
         nameLabel.textContent = label; nameInput.value = initial; nameForm.hidden = false;
         nameInput.focus(); nameForm.scrollIntoView({ block: 'nearest' });
         return new Promise(resolve => { resolveName = resolve; });
@@ -102,14 +105,29 @@ export function mountFloatingPanel(status, handlers) {
     listen(nameForm, 'submit', event => {
         event.preventDefault();
         if (!nameInput.value.trim()) { nameInput.focus(); return; }
-        finishName(nameInput.value.trim());
+        finishName(extraInput.hidden ? nameInput.value.trim() : { name: nameInput.value.trim(), extra: extraInput.value.trim() });
     });
-    const actionList = node('div'); actionList.id = 'qhjt-action-list';
+    const actionList = node('div', undefined, 'qhjt-card-grid'); actionList.id = 'qhjt-action-list';
+    const actionScope = select('qhjt-action-scope', '行动范围', pages.actions);
+    for (const [value, text] of [['current', '当前位置行动'], ['all', '全部行动']]) {
+        const option = node('option', text); option.value = value; actionScope.append(option);
+    }
+    actionScope.value = 'current'; listen(actionScope, 'change', handlers.update);
     const addAction = button('＋添加行动', 'qhjt-add-action', handlers.addAction);
     pages.actions.append(actionList, addAction);
-    const world = select('qhjt-world', '当前聊天世界模板', pages.world);
+    const locationCurrent = node('p'); locationCurrent.id = 'qhjt-location-current';
+    const locationList = node('div', undefined, 'qhjt-card-grid'); locationList.id = 'qhjt-location-list';
+    const addLocation = button('＋添加地点', 'qhjt-add-location', handlers.addLocation);
+    const locationDetail = node('section', undefined, 'qhjt-card'); locationDetail.id = 'qhjt-location-detail'; locationDetail.hidden = true;
+    pages.locations.append(locationCurrent, node('h3', '已发现地点'), locationList, addLocation, locationDetail);
+    const world = select('qhjt-world', '当前聊天世界模板', pages.settings);
     listen(world, 'change', handlers.world);
     pages.settings.append(node('p', '游戏模式：已开启'), node('p', 'AI设置、显示设置、存档管理：未来开放。'));
+    const discoveryHistory = node('details'); discoveryHistory.id = 'qhjt-discovery-history';
+    const discoveryLog = node('div'); discoveryLog.id = 'qhjt-discovery-log';
+    const undoDiscovery = button('撤销最近自动发现', 'qhjt-undo-discovery', handlers.undoDiscovery);
+    discoveryHistory.append(node('summary', '发现记录'), discoveryLog);
+    pages.settings.append(undoDiscovery, discoveryHistory);
     const debug = node('details'); debug.id = 'qhjt-debug';
     const info = node('p', undefined, 'qhjt-info');
     debug.append(node('summary', '调试信息'), info); pages.settings.append(debug);
@@ -135,6 +153,7 @@ export function mountFloatingPanel(status, handlers) {
     }
     function hide(focus = false) {
         detail.hidden = true;
+        locationDetail.hidden = true;
         finishName(null); if (overlay.open) overlay.close();
         panel.hidden = true; unlockScroll(); entry.setAttribute('aria-expanded', 'false');
         if (focus && !host.hidden && host.isConnected) entry.focus();
@@ -160,7 +179,8 @@ export function mountFloatingPanel(status, handlers) {
     const input = document.getElementById('form_sheld'); if (input) observer?.observe(input);
     selectTab('state'); position();
     return { host, entry, overlay, panel, close, values, worldValues, actorValues, plus, minus, world,
-        actionList, addAction, actorList, addCharacter, addUser, addCustom, control,
+        actionList, actionScope, addAction, locationCurrent, locationList, locationDetail, addLocation, discoveryLog, undoDiscovery,
+        actorList, addCharacter, addUser, addCustom, control,
         detail, detailValues, info, controller, requestName,
         openFloating: open, closeFloating: hide, positionFloating: position,
         destroyFloating() { hide(); controller.abort(); observer?.disconnect(); host.remove(); overlay.remove(); },

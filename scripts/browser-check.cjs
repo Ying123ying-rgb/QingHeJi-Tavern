@@ -9,8 +9,8 @@ const fixture = `<!doctype html><html><head><meta name="viewport" content="width
 *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font:16px sans-serif;background:#222;color:#eee}#top-settings-holder{position:fixed;top:0;height:48px;width:100%;background:#444}#sheld{position:fixed;top:48px;bottom:0;width:100%;display:flex;flex-direction:column}#chat{flex:1;overflow:auto;min-height:0}#form_sheld{height:90px;flex-shrink:0;background:#333}#extensions_settings2{position:absolute;left:0;top:50px;width:250px;background:#222;z-index:5}#extensions_settings2[hidden]{display:none}
 </style></head><body><nav id="top-settings-holder">Mock host navigation</nav><section id="sheld"><div id="chat"><div style="height:2000px">Mock chat</div></div><div id="form_sheld">Mock input / send</div></section><div id="extensions_settings2"></div>
 <script type="module">
-const events={}, metadataA={}, metadataB={}; let metadata=metadataA, chatId='A';
-window.SillyTavern={getContext:()=>({characterId:0,characters:[{name:'砚绒',avatar:'yanrong.png'}],name1:'我',chatId,chatMetadata:metadata,extensionSettings:settings,saveMetadata:async()=>{},saveSettingsDebounced:()=>{},eventTypes:{APP_INITIALIZED:'init',CHAT_CHANGED:'chat'},eventSource:{on:(id,fn)=>{events[id]=fn}}})};
+const events={}, metadataA={}, metadataB={}, messages=[]; let metadata=metadataA, chatId='A';
+window.SillyTavern={getContext:()=>({characterId:0,characters:[{name:'砚绒',avatar:'yanrong.png'}],name1:'我',chat:messages,chatId,chatMetadata:metadata,extensionSettings:settings,saveMetadata:async()=>{},saveSettingsDebounced:()=>{},eventTypes:{APP_INITIALIZED:'init',CHAT_CHANGED:'chat',GENERATION_AFTER_COMMANDS:'start',MESSAGE_RECEIVED:'received',GENERATION_ENDED:'end',GENERATION_STOPPED:'stop'},eventSource:{on:(id,fn)=>{events[id]=fn}}})};
 const settings={}; window.confirm=()=>true;
 const check=(value,message)=>{if(!value)throw Error(message)};
 const get=id=>document.getElementById(id);
@@ -25,6 +25,7 @@ try {
   await import('/index.js');await delay();
   check(get('qhjt-host')?.parentElement===document.body&&!get('qhjt-host').hidden,'Saved enabled chat visible on refresh without anchors or init event');
   check(Object.keys(metadataA.qingheji_tavern.actions).length===1,'Refresh keeps actions');
+  check(Object.keys(metadataA.qingheji_tavern.locations).length===1,'Refresh keeps locations');
   check(document.querySelectorAll('#qhjt-entry').length===1,'Refresh has one launcher');
   window.__result={passed:true,reloaded:true};
  } else {
@@ -64,7 +65,7 @@ try {
  await click('qhjt-entry');
  const system=document.createElement('dialog');system.textContent='Mock system popup';document.body.append(system);system.showModal();
  check(document.elementFromPoint(160,370)===system||system.contains(document.elementFromPoint(160,370)),'Later system modal stays on top');system.close();system.remove();
- await click('qhjt-tab-world');await change('qhjt-world','modern_city');
+ await click('qhjt-tab-settings');await change('qhjt-world','modern_city');
  await click('qhjt-tab-state');await click('qhjt-control');
  check(metadata.qingheji_tavern.controlMode==='user','Switch to User');
  check(!get('qhjt-active'),'No ordinary protagonist selector');
@@ -85,7 +86,35 @@ try {
  const focus=get('qhjt-name').getBoundingClientRect(), scroll=get('qhjt-scroll').getBoundingClientRect();
  check(focus.top>=scroll.top-1&&focus.bottom<=scroll.bottom+1,'Name input scrolled into view');
  await click('qhjt-name-cancel');
+ await click('qhjt-tab-locations');await click('qhjt-add-location');
+ get('qhjt-name').value='后山';get('qhjt-name-extra').value='逐步发现的地点';await click('qhjt-name-ok');
+ const locationId=Object.keys(metadata.qingheji_tavern.locations)[0];
+ check(Boolean(locationId),'Manual location created');
+ await click('qhjt-location-'+locationId);
+ for(const [field,name] of [['resources','柴火'],['resources','野菜'],['capabilities','采集'],['services','休息']]){
+  await click('qhjt-add-'+field);get('qhjt-name').value=name;await click('qhjt-name-ok');
+ }
+ check(metadata.qingheji_tavern.locations[locationId].resources.length===2,'Incremental resources');
+ await click('qhjt-associate-action');await click('qhjt-set-location');
+ check(metadata.qingheji_tavern.actors.actor_2.locationId===locationId&&metadata.qingheji_tavern.actors.actor_1.locationId===null,'Independent actor location');
+ await click('qhjt-tab-actions');
+ const firstButton=get('qhjt-action-list').querySelector('button');
+ check(firstButton.getBoundingClientRect().width>=100,'Action name gets useful horizontal width');
+ const deletion=get('qhjt-action-list').querySelectorAll('button')[1];
+ check(deletion.getBoundingClientRect().height<=48,'Delete label fits horizontally');
+ check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'Location/action cards fit mobile');
+ await click('qhjt-tab-state');await click('qhjt-control');await click('qhjt-tab-actions');
+ check(!get('qhjt-action-list').querySelector('button'),'Current location filters linked action');
+ await change('qhjt-action-scope','all');check(Boolean(get('qhjt-action-list').querySelector('button')),'All actions available');
+ await events.start('normal');messages.push({is_user:true,mes:'我们来到了集市。'},{is_user:false,mes:'这里允许摆摊赚钱。'});
+ await events.end();await events.received(messages.length-1);await delay();
+ check(Object.values(metadata.qingheji_tavern.locations).some(location=>location.label==='集市'&&location.visited),'Completed round discovers location');
+ check(Object.values(metadata.qingheji_tavern.actions).some(action=>action.label==='摆摊赚钱'),'Completed round discovers action');
+ const count=metadata.qingheji_tavern.discoveryLog.length;await events.end();check(metadata.qingheji_tavern.discoveryLog.length===count,'Round scanned once');
+ await click('qhjt-tab-settings');await click('qhjt-undo-discovery');
+ check(Object.keys(metadata.qingheji_tavern.locations).length===1&&Object.keys(metadata.qingheji_tavern.actions).length===1,'Undo removes auto entities and keeps manual data');
  metadata=metadataB;chatId='B';await events.chat();check(get('qhjt-host').hidden&&!get('qhjt-overlay').open,'B OFF clears A UI');
+ await on();check(Object.keys(metadataB.qingheji_tavern.locations).length===0,'B has no A locations');
  metadata=metadataA;chatId='A';await events.chat();check(!get('qhjt-host').hidden,'A ON restored');
  const oldEntry=get('qhjt-entry');get('qhjt-host').remove();get('qhjt-overlay').remove();await delay();
  check(get('qhjt-entry')!==oldEntry&&!get('qhjt-host').hidden,'Observer repairs removed body UI');
@@ -109,7 +138,7 @@ try {
 async function main() {
     const executable = process.env.QHJT_CHROME || ['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(file=>fs.existsSync(file));
     if(!executable)throw Error('Set QHJT_CHROME to a local Chrome/Chromium executable.');
-    const allowed = new Set(['index.js','style.css','ui/floating-panel.js','core/game-state.js','core/actions.js','core/actor-sources.js','data/world-templates.js']);
+    const allowed = new Set(['index.js','style.css','ui/floating-panel.js','core/game-state.js','core/actions.js','core/world-discovery.js','core/discovery-provider.js','ui/discovery-session.js','core/actor-sources.js','data/world-templates.js']);
     const server=http.createServer((req,res)=>{
         const name=(req.url||'/').slice(1);
         if(!name){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(fixture);return}

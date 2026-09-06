@@ -82,7 +82,7 @@ export function createActor(templateId, descriptor, id) {
         sourceType: descriptor.sourceType ?? 'custom', sourceId: descriptor.sourceId ?? null,
         avatar: descriptor.avatar ?? null,
         currency: base.currency, stats: base.stats, inventory: {}, skills: {}, relationships: {}, personalState: {},
-        location: null, occupation: null, schedule: [], needs: {}, memory: [], flags: {},
+        location: null, locationId: null, occupation: null, schedule: [], needs: {}, memory: [], flags: {},
     };
 }
 
@@ -91,13 +91,13 @@ export function createState(templateId = DEFAULT_TEMPLATE_ID, enabled = false) {
     return {
         schemaVersion: 5, enabled: base.enabled, world: base.world,
         calendar: base.calendar, worldState: {}, controlMode: 'character', inspectedActorId: null,
-        actors: {}, nextActorNumber: 1, actions: {},
+        actors: {}, nextActorNumber: 1, actions: {}, locations: {}, discoveryLog: [], discoveryScan: {},
     };
 }
 
 export function needsMigration(saved) {
     if (!isObject(saved)) return false;
-    if (isObject(saved.actors)) return !isObject(saved.actions) || !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
+    if (isObject(saved.actors)) return !isObject(saved.locations) || !Array.isArray(saved.discoveryLog) || !isObject(saved.actions) || !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
     return !Object.hasOwn(saved, 'actors')
         && (isLegacyState(saved) || Object.hasOwn(saved, 'currency') || Object.hasOwn(saved, 'stats'));
 }
@@ -108,6 +108,8 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
         const old = readSingleState(saved);
         const result = { ...copy(old), ...createState(getTemplate(old.world.templateId)?.id, old.enabled) };
         result.actions = isObject(saved.actions) ? copy(saved.actions) : {};
+        result.locations = isObject(saved.locations) ? copy(saved.locations) : {};
+        result.discoveryLog = Array.isArray(saved.discoveryLog) ? copy(saved.discoveryLog) : [];
         result.world = old.world;
         result.calendar = old.calendar;
         result.worldState = old.worldState;
@@ -129,6 +131,10 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
     result.worldState = normalized.worldState;
     result.enabled = saved.enabled === true;
     result.actions = isObject(saved.actions) ? copy(saved.actions) : {};
+    result.locations = isObject(saved.locations) ? copy(saved.locations) : {};
+    result.discoveryLog = Array.isArray(saved.discoveryLog) ? copy(saved.discoveryLog) : [];
+    result.discoveryScan = isObject(saved.discoveryScan) ? copy(saved.discoveryScan) : {};
+    for (const action of Object.values(result.actions)) if (isObject(action) && !Array.isArray(action.locationIds)) action.locationIds = [];
     result.actors = {};
     for (const [id, actor] of Object.entries(isObject(saved.actors) ? saved.actors : {})) {
         if (!isObject(actor) || !/^actor_[A-Za-z0-9_-]+$/.test(id)) continue;
@@ -214,6 +220,9 @@ export function changeCurrency(game, delta, ctx) {
 export function resetWorld(game, templateId) {
     const result = createState(templateId, game.enabled);
     result.actions = copy(game.actions ?? {});
+    result.locations = copy(game.locations ?? {});
+    result.discoveryLog = copy(game.discoveryLog ?? []);
+    result.discoveryScan = copy(game.discoveryScan ?? {});
     result.nextActorNumber = game.nextActorNumber;
     for (const actor of Object.values(game.actors)) {
         result.actors[actor.id] = createActor(templateId, actor, actor.id);

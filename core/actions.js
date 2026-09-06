@@ -16,7 +16,7 @@ export function addAction(game, name) {
     const base = 'action_' + Array.from(label.toLowerCase(), char => char.codePointAt(0).toString(16)).join('_');
     let id = base, suffix = 2;
     while (Object.hasOwn(game.actions, id)) id = `${base}_${suffix++}`;
-    const action = { id, label, enabled: true, temporary: true, source: 'user', metadata: {} };
+    const action = { id, label, enabled: true, temporary: true, source: 'user', locationIds: [], metadata: {} };
     game.actions[id] = action;
     return action;
 }
@@ -25,5 +25,6 @@ export function removeAction(game, name) {
     if (!action) throw new Error('当前聊天没有该行动。');
     const key = Object.keys(game.actions).find(key => game.actions[key] === action);
     delete game.actions[key];
+    for (const location of Object.values(game.locations ?? {})) location.actions = (location.actions ?? []).filter(id => id !== key);
     return action;
 }
