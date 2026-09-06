@@ -4,6 +4,10 @@
     overflow-wrap: anywhere;
 }
 .qhjt-settings { padding: 8px; }
+.qhjt-settings .qhjt-button { min-height: 44px; min-width: 44px; max-width: 100%; margin: 0; white-space: normal; touch-action: manipulation; }
+.qhjt-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.qhjt-actor-row { min-width: 0; padding: 6px 0; border-bottom: 1px solid var(--SmartThemeBorderColor, #666); }
+.qhjt-actor-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qhjt-world-label { display: block; margin-top: 8px; }
 .qhjt-settings .qhjt-world { box-sizing: border-box; width: 100%; max-width: 100%; min-width: 0; min-height: 44px; padding: 6px; font: inherit; }
 .qhjt-settings h3, .qhjt-panel h3 { margin: 4px 0; font-size: 1rem; }

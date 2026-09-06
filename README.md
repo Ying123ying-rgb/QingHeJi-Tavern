@@ -1,141 +1,129 @@
 # 酒馆人生模拟器 · QingHeJi-Tavern
 
-通用 **SillyTavern 生活模拟游戏引擎**，当前版本 **0.1.1**。青禾记 / 古代田园只是第一个世界模板。仓库及本地项目目录仍为 `QingHeJi-Tavern`。
+通用 SillyTavern 生活模拟游戏引擎，当前版本 **0.1.2**。青禾记 / 古代田园只是第一个世界模板。仓库与目录仍为 `QingHeJi-Tavern`。
 
-每个聊天拥有独立世界与独立游戏存档。同一张角色卡可以在聊天 A 使用古代田园、聊天 B 使用现代都市、聊天 C 使用星际时代；世界选择不改变角色卡设定。
+本版结构：**一个聊天世界 + 多个人物状态 + 可切换当前主角**。每个聊天独立保存，SillyTavern 当前聊天角色与模拟游戏当前主角相互解耦。切换主角不会切换聊天。
 
-本轮只有通用架构、模板选择与测试面板。不调用 AI、不发送消息，不修改角色卡、世界书或 SillyTavern 核心代码。无背包、商店、买卖、种田、做饭、关系玩法或随机事件，无 Server Plugin、Extras 或运行时 npm 依赖。
+不调用 AI、不开发副 API，不发送消息，不修改聊天文本、角色卡、世界书或 SillyTavern 核心代码。背包、商店、种田、摆摊、NPC 行动等均未实现。
 
-## 安装与更新
+## 安装与使用
 
 仓库：<https://github.com/Ying123ying-rgb/QingHeJi-Tavern>
 
-在 Android Termux 正常启动已有的 SillyTavern。首次安装时，在扩展 → 安装扩展中输入上述仓库 URL；已安装 v0.1 的用户在扩展管理中更新，然后刷新浏览器。
+Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 URL 安装，已有用户更新后刷新浏览器。无需 Server Plugin、Extras、构建或 npm 依赖。
 
-1. 在扩展设置找到「酒馆人生模拟器」。总开关默认打开，每聊天游戏模式默认关闭。
-2. 选择一个聊天，通过「当前聊天世界模板」选择古代田园、现代都市或星际时代。
-3. 选择不同模板时会提示：“切换世界模板将重置当前聊天的模拟游戏初始状态，但不会修改角色卡、聊天记录或其他聊天存档。”取消不做更改，确认后仅重置当前聊天模拟存档，保留 `enabled`。
-4. 开启「当前聊天启用游戏模式」，在消息区下方、输入区上方点击「人生模拟」。
-5. 面板显示版本、当前角色、世界、游戏开关状态及当前世界的数据。使用「关闭」按钮或 Escape 收起。
+1. 扩展设置找到「酒馆人生模拟器」。插件总开关默认打开，每聊天游戏模式默认关闭。
+2. 选择当前聊天世界模板。新聊天初始没有人物，不会自动复制角色设定。
+3. 在「人物」区域添加当前角色、添加“我”或添加自定义人物。第一个人物自动成为主角，后来添加的人物不抢占当前主角。
+4. 用「当前主角」下拉框或名单中的「切换为当前主角」按钮切换。
+5. 开启游戏模式，点击消息区下方、输入区上方的「人生模拟」。面板分别显示世界状态与当前主角的人物状态。
+6. 「测试修改」中的货币 +100 / -100 只改当前主角，允许出现负数，仅作状态隔离测试，不是正式经济玩法。
+7. 人物「删除」须确认。删除当前主角后选中剩余第一个人物，全部删除后 `activeActorId = null`；空人物面板仍显示世界日期时间及添加提示。
 
-关闭总开关会隐藏入口和面板，保留每个聊天的状态。无有效聊天、总开关关闭或正在保存时，游戏开关与世界选择器不可操作。群聊没有单一当前角色，角色栏显示「群聊（无单一当前角色）」。
+## 人物来源与身份
 
-## 三个内置世界
+- **添加当前角色**：只读取 Context 中的 `characterId`、角色名称、`avatar` 文件名，不读取 description、scenario、first message 或世界书。相同角色来源在当前聊天内不能重复添加；同名自定义人物允许存在。
+- **添加“我”**：读取公开 Context 的 `name1`，不可用时名称为「我」。每个聊天一个玩家人物，`sourceType: user`、`sourceId: self`。添加后名单提供「修改显示名称」，只改模拟人物，不改 SillyTavern persona。切换 persona 不会自动生成新人物或重命名已保存的人物。
+- **添加自定义人物**：只提示填写名称，取消或全空白不创建；`sourceType: custom`。本轮没有人物编辑器或头像编辑器。
 
-| 模板 ID | 世界 | 货币 | 日期 / 时间 | 状态 |
+**角色身份的重要 API 限制**：官方明确 `characterId` 只是角色数组下标，并非稳定唯一 ID。本项目读取该下标定位当前角色，但 `sourceId` 使用 Context 的 `character.avatar` 文件名，在数组重排后仍能去重；`avatar` 同时保留该文件名，本版不加载头像图片。没有可用文件名时禁用「添加当前角色」，可添加玩家/自定义人物；旧存档迁移则回退为「默认主角」。群聊没有单一当前角色时同样回退。
+
+角色卡重命名若改变文件名、删除后重新导入，可能被识别为新来源；没有修改角色卡来植入 UUID，也不声称拥有跨重导入的永久身份。人物名称是添加时的显示快照，不随角色卡重命名自动更新。
+
+## 世界模板
+
+| 模板 ID | 世界 | 每个新增人物的默认货币 | 世界日期 / 时间 | 每个人物的默认状态 |
 | --- | --- | --- | --- | --- |
 | `ancient_rural` | 古代田园 | 铜钱 100 | 三月初一 / 辰时 | 体力 100/100、饱腹 100/100 |
 | `modern_city` | 现代都市 | 余额 ¥1000 | 9月6日 / 08:00 | 精力 100/100、饱腹 100/100、心情 80/100 |
 | `sci_fi` | 星际时代 | 信用点 3000 | 星历2387-104 / 舰时08:00 | 行动力 100/100、氧气 100/100、舰船能源 100/100 |
 
-## 文件与架构
+切换世界提示：“切换世界模板将重置本聊天的世界状态以及所有人物的模拟状态，但不会修改角色卡或聊天记录。”
 
-| 文件 | 职责 |
-| --- | --- |
-| `manifest.json` | 显示名称、版本、加载顺序及入口 |
-| `index.js` | 沿用 v0.1 的加载事件、DOM 挂载和 Context 兼容逻辑；设置、确认、保存与通用面板 |
-| `data/world-templates.js` | 统一结构的只读世界定义、显示标签、初始值与未来接口占位 |
-| `core/game-state.js` | 初始化、纯数据读取与缺省处理、v0.1 迁移；不依赖 DOM 或 SillyTavern |
-| `style.css` | 有作用域的手机布局与触摸尺寸 |
-| `scripts/check.cjs` | 本地静态检查、真实 ES Module 解析与链接、模拟 Context/DOM 测试 |
-| `data/.gitkeep` | 保留的原目录占位文件 |
-| `LICENSE` | MIT 许可证 |
+确认后保留 `enabled`、人物名单、id/name/sourceType/sourceId/avatar，以及原主角（仍存在时）。重置 calendar、worldState 与所有人物模拟字段，包括 currency、stats、inventory、skills、relationships、personalState 及未来扩展占位。每个人按新模板取得独立副本，不做跨世界资产转换。取消保持原样。
 
-模板采用相同的 `id`、`version`、`displayName`、`currency`、`calendar`、`stats` 结构。初始化时深复制数据，每个聊天有自己的对象，不能修改模板常量。UI 只读取通用字段并遍历 `stats`，没有按三个世界分别判断的面板；未来新增精神值、健康等状态只需增加数据项。
+## 数据架构
 
-每个模板还预留 `locations`、`items`、`shops`、`actions`、`recipes`、`events` 数组，以及 `rules`、`aiContext` 对象。这些字段当前为空，仅供未来扩展，没有相关页面、执行器或 AI 调用。模板版本与存档结构版本分开记录；未来更改模板版本需要定义对应的升级策略，本轮只实现 v0.1 到 v0.1.1 的迁移。
-
-## 每聊天存档
-
-保留原有命名空间：总开关仍在 `extensionSettings.qingheji_tavern.enabled`，模拟存档仍在 `chatMetadata.qingheji_tavern`。`data/` 不是存档目录；持久化由手机上的 SillyTavern 管理。
+仍使用 `extensionSettings.qingheji_tavern` 保存总开关，使用当前聊天的 `chatMetadata.qingheji_tavern` 保存游戏。`data/` 是静态模板目录，不是手机存档目录。
 
 ```json
 {
-  "schemaVersion": 2,
-  "enabled": false,
-  "world": { "templateId": "ancient_rural", "templateVersion": 1 },
-  "currency": { "id": "money", "label": "铜钱", "symbol": "", "amount": 100 },
-  "calendar": { "dateLabel": "日期", "date": "三月初一", "timeLabel": "时辰", "time": "辰时" },
-  "stats": [
-    { "id": "stamina", "label": "体力", "value": 100, "max": 100 },
-    { "id": "satiety", "label": "饱腹", "value": 100, "max": 100 }
-  ],
-  "inventory": {},
-  "relationships": {},
-  "skills": {},
-  "worldState": {}
+  "schemaVersion": 3,
+  "enabled": true,
+  "world": { "templateId": "modern_city", "templateVersion": 1 },
+  "calendar": { "dateLabel": "日期", "date": "9月6日", "timeLabel": "时间", "time": "08:00" },
+  "worldState": {},
+  "activeActorId": "actor_1",
+  "nextActorNumber": 2,
+  "actors": {
+    "actor_1": {
+      "id": "actor_1",
+      "name": "砚绒",
+      "sourceType": "character",
+      "sourceId": "yanrong.png",
+      "avatar": "yanrong.png",
+      "currency": { "id": "money", "label": "余额", "symbol": "¥", "amount": 1000 },
+      "stats": [
+        { "id": "energy", "label": "精力", "value": 100, "max": 100 },
+        { "id": "satiety", "label": "饱腹", "value": 100, "max": 100 },
+        { "id": "mood", "label": "心情", "value": 80, "max": 100 }
+      ],
+      "inventory": {}, "skills": {}, "relationships": {}, "personalState": {},
+      "location": null, "occupation": null, "schedule": [], "needs": {}, "memory": [], "flags": {}
+    }
+  }
 }
 ```
 
-普通开关操作保留额外字段和状态项；确认切换世界才重新初始化整份模拟存档。新聊天只读展示默认值，不主动创建存档，直到用户切换模板或操作游戏开关。未知模板 ID 不自动覆盖为其他世界，选择器显示“未识别模板”；可以确认选择一个已知模板重新初始化。
+`world/calendar/worldState` 为共享世界状态；其余人物模拟字段在各 actor 内。模板只读且初始化深复制，不同 actor 不共享嵌套对象。`nextActorNumber` 是聊天内递增的 ID 分配器，删除人物不复用其 ID。人物 id 无须跨聊天唯一。
 
-每次操作获取最新 Context，并用聊天标识和元数据对象检查过期操作。切换聊天会关闭旧面板、重新读取当前状态。异步保存完成后不会将旧对象写入新聊天。复制、分支或导入聊天时，SillyTavern 可能复制元数据，因此会继承初始状态；此后仍分别保存。删除聊天也会删除随附存档。
+UI 遍历统一的 currency、calendar、stats，不根据古代/现代/星际分别硬编码。未来新增状态只需数据项。模板原有 locations/items/shops/actions/recipes/events/rules/aiContext 占位保留；人物 location/occupation/schedule/needs/memory/flags 仅是容器，没有自主行为。
 
-## v0.1 自动迁移
+## v0.1 / v0.1.1 迁移
 
-初始化或 `CHAT_CHANGED` 时，如果存在旧字段而没有 `world.templateId`，自动转换为 `ancient_rural` 并通过原有 `saveMetadata()` 请求保存：
+初始化及切换聊天时自动检测旧存档，转换为 schemaVersion 3 并请求保存：
 
-| 旧字段 | 新字段 |
-| --- | --- |
-| `enabled` | 保持原值 |
-| `money` | `currency.amount` |
-| `date` / `time` | `calendar.date` / `calendar.time` |
-| `stamina.current` / `stamina.max` | `stats` 中 `id="stamina"` 的 `value` / `max` |
-| `satiety.current` / `satiety.max` | `stats` 中 `id="satiety"` 的 `value` / `max` |
+- v0.1 先沿用原迁移逻辑：归入古代田园，money → currency.amount，date/time → calendar，stamina/satiety 的 current/max → stats 的 value/max。
+- v0.1.1 无 actors、只有 currency/stats 的旧结构，保留 world/calendar/worldState，将 currency/stats/inventory/skills/relationships/personalState 放进一个新 actor。
+- 新 actor 优先取当前角色的最小身份信息；不可读取时为自定义来源「默认主角」。`activeActorId` 指向它。
+- 金额零值、日期时间、自定义状态值和最大值均保留，不重置为模板初始值。其他元数据命名空间不受影响，聊天文本不变。
+- 已有 actors（包括空对象）的存档不会再自动创建人物。迁移幂等，重复打开不会丢进度。
 
-零值与原有最大值会保留；缺失或无效值使用模板缺省值。迁移后移除旧底层字段，保留未来扩展字段及聊天元数据中的其他命名空间。不会修改聊天文本。迁移幂等，不会每次打开面板重置进度。
+继续使用原保存/回滚机制：每次操作获取最新 Context，拒绝过期聊天操作，保存中禁用编辑；失败抛错时恢复旧对象，不循环重试迁移。重新加载或手动修改可重试。异步完成不会把旧聊天人物写进新聊天。
 
-保存抛出异常时恢复原存档对象，不循环自动重试；重新加载聊天/页面或手动操作游戏开关可以重试。显示层仍可以读取旧结构，不会因升级而直接报错。
+宿主保存 API 不提供独立的指定聊天写盘确认，部分网络失败只由宿主提示而不抛错。“保存请求已完成”不代表已独立验证落盘；请刷新检查，快速切换期间的实际保存仍需手机验收。复制/分支/导入聊天可能由宿主复制初始元数据，复制后分别保存。
 
-## 加载兼容依据
+## 文件与加载兼容
 
-保持最低 SillyTavern 版本 **1.18.0**，保留 `loading_order: 100`、`js: index.js`、`css: style.css` 及 Context API 能力检查。
+- `manifest.json`：0.1.2，最低 SillyTavern 1.18.0，加载顺序仍为 100。
+- `index.js`：现有 Context/挂载逻辑、人物管理、模板确认、分区面板与保存。
+- `core/game-state.js`：世界和 actor 初始化、操作及两代迁移；不访问 DOM 或 SillyTavern。
+- `core/actor-sources.js`：从公开 Context 提取最少身份信息。
+- `data/world-templates.js`：三个统一结构的只读模板，保持原定义。
+- `style.css`：手机 select、44px 按钮、长名字省略及可换行布局。
+- `scripts/check.cjs`：静态和模拟 Context/DOM 测试。
+- `data/.gitkeep`、`LICENSE`：保留原文件。
 
-SillyTavern 1.18.0 的官方 `addExtensionScript` 本来就用 `script.type = 'module'` 加载 manifest 入口。v0.1.1 使用相对 ES Module 导入分离项目自身文件，不修改宿主加载方式、不依赖电脑路径，也不导入宿主内部文件。无需另加加载器、全局脚本注册、构建步骤或 JSON 网络请求。
+保留 `APP_INITIALIZED`、`CHAT_CHANGED`、`#extensions_settings2`（回退 `#extensions_settings`）、`chat.after(host)`，以及 `eventTypes/event_types`、`chatId/getCurrentChatId()` 兼容方式。所有项目模块使用相对路径，未导入宿主内部模块。宿主原本以 ES Module 加载 manifest 入口，无需新加载器。
 
-- [官方 UI Extension 规范](https://docs.sillytavern.app/for-contributors/writing-extensions/)
-- [1.18.0 扩展加载器](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions.js)
-- [1.18.0 Context API](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js)
-- [1.18.0 页面结构](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/index.html)
-- [1.18.0 保存流程](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/script.js)
+依据：[官方扩展规范与 characterId 限制](https://docs.sillytavern.app/for-contributors/writing-extensions/)、[公开 Context](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js)、[扩展加载器](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions.js)。
 
-挂载沿用 `APP_INITIALIZED`、`CHAT_CHANGED`、`#extensions_settings2`（回退 `#extensions_settings`）和 `chat.after(host)`。设置、保存仍使用 `SillyTavern.getContext()`。保留 `eventTypes` / `event_types`、`chatId` / `getCurrentChatId()` 兼容方式。
+## 验证和发布
 
-## 检查与实机验收
-
-用户已确认 **v0.1 在 Android SillyTavern 安装成功且正常显示面板**。**本次 v0.1.1 只完成本地检查，尚未实机验证。**
+用户已确认 v0.1.1 通过 Android 实机测试。**本次 v0.1.2 只有本地静态/模拟测试，尚未实机验证。**
 
 ```sh
 node scripts/check.cjs
 ```
 
-需要本地 Node.js。检查器使用 Node 自带 VM Module 解析与链接真实入口及相对依赖，并模拟 DOM/Context；运行时自动为子进程添加 `--experimental-vm-modules`。Node 的实验特性提示仅属于测试器，不是手机插件运行依赖。
+测试器使用 Node 内置 VM Module 解析并链接真实项目模块，自动在测试子进程使用 `--experimental-vm-modules`；实验提示仅属于测试器，不是手机依赖。覆盖三个模板的人物初始化、三个人物货币/stats 深度隔离、主角与日期解耦、增删/玩家改名、确认/取消切换世界、两代迁移、空人物、每聊天隔离、失败回滚、过期操作、角色卡与聊天文本不变、manifest/语法/相对路径。
 
-覆盖三个模板初始化及面板数据、额外状态动态渲染、同角色不同聊天世界隔离、确认/取消/失败的模板重置、保留 enabled、旧存档迁移和幂等性、迁移失败回滚、保存期间切换聊天、manifest JSON、JS 语法与相对导入路径。模拟检查不验证真实网络写盘或 CSS 布局。
+Android 重点验收：升级加载；旧金额日期状态迁移并刷新保留；同聊天三种来源共存与去重；主角切换及 ±100 不影响其他人物；删除确认和删空；玩家显示名修改；世界切换保留名单并重置全员；不同聊天隔离；320px 长名、软键盘、横竖屏且输入框不被遮挡。挂载 DOM 仍可能受宿主或其他扩展影响。
 
-手机重点验收：
-
-1. 更新并刷新后，设置区与入口仍正常挂载，新增模块无加载错误。
-2. 已有 v0.1 存档保留金额、日期、时辰、体力和饱腹，刷新后仍保留迁移结果。
-3. 同角色的 A/B/C 聊天分别选择三个世界，往返切换及刷新后不串档。
-4. 模板确认与取消、关闭游戏模式后切换世界、总开关关闭再恢复。
-5. 320px 宽度、长状态名称、横竖屏和软键盘；选择器及按钮约 44px 触摸高度，面板不横向溢出，输入框不被遮挡。
-6. 保存期间快速切换聊天、网络失败与群聊行为，以及主题/其他 UI 扩展共存。
-
-已知限制：挂载点属于宿主 DOM，升级或其他扩展可能影响布局。官方 `saveMetadata()` 不提供指定聊天的独立写盘确认，部分失败仅由宿主提示而不抛出；“保存请求已完成”不保证已核实持久化。保存完成前请等待，快速切换聊天的实际写盘行为仍需手机验收。
-
-## 发布 v0.1.1
-
-保留 v0.1 历史提交，在现有 `main` 上创建新提交：
-
-```text
-Refactor v0.1.1 into world-template simulation engine
-```
-
-本次交付只做本地提交。随后在本项目的普通 PowerShell 终端执行：
+本次创建新的本地提交 `Add multi-actor protagonist state system`，保留历史提交。在项目普通 PowerShell 中发布：
 
 ```sh
 git push origin main
 ```
 
-如出现 GitHub 登录或浏览器授权，按提示完成；不使用强制推送。不继续开发 v0.2。
+不在 Codex 中执行交互式 push。不开发副 API 或 v0.1.3。
