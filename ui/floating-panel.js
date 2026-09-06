@@ -45,7 +45,7 @@ export function mountFloatingPanel(status, handlers) {
         }
         scroll.scrollTop = 0;
     }
-    for (const [id, label] of [['state', '状态'], ['actions', '行动'], ['locations', '地点'], ['actors', '人物'], ['settings', '设置']]) {
+    for (const [id, label] of [['state', '状态'], ['inventory', '物资'], ['locations', '地点'], ['npcs', '人物'], ['settings', '设置']]) {
         const page = node('section'); page.id = `qhjt-page-${id}`;
         page.setAttribute('role', 'tabpanel'); page.setAttribute('aria-labelledby', `qhjt-tab-${id}`);
         const tab = button(label, `qhjt-tab-${id}`, () => selectTab(id));
@@ -61,25 +61,22 @@ export function mountFloatingPanel(status, handlers) {
     });
     const worldValues = node('dl', undefined, 'qhjt-values'); worldValues.id = 'qhjt-world-values';
     const actorValues = node('dl', undefined, 'qhjt-values'); actorValues.id = 'qhjt-actor-values';
-    const plus = button('货币 +100', 'qhjt-plus', () => handlers.currency(100));
-    const minus = button('货币 -100', 'qhjt-minus', () => handlers.currency(-100));
-    const testButtons = node('div', undefined, 'qhjt-actions'); testButtons.append(plus, minus);
-    const control = button('切换到我', 'qhjt-control', handlers.control);
-    pages.state.append(control, node('h3', '世界状态'), worldValues, node('h3', '当前操作角色状态'), actorValues,
-        node('h3', '测试修改'), testButtons);
+    pages.state.append(worldValues, node('h3', '当前状态'), actorValues);
     const select = (id, label, page) => {
         const caption = node('label', label, 'qhjt-label'); caption.htmlFor = id;
         const input = node('select'); input.id = id; page.append(caption, input); return input;
     };
-    const addCharacter = button('添加当前角色', 'qhjt-add-character', () => handlers.add('character'));
-    const addUser = button('添加“我”', 'qhjt-add-user', () => handlers.add('user'));
-    const addCustom = button('添加自定义人物', 'qhjt-add-custom', () => handlers.add('custom'));
-    const addButtons = node('div', undefined, 'qhjt-actions'); addButtons.append(addCharacter, addUser, addCustom);
-    const actorList = node('div'); actorList.id = 'qhjt-actors';
-    const detail = node('section'); detail.id = 'qhjt-actor-detail'; detail.hidden = true;
-    const detailValues = node('dl', undefined, 'qhjt-values'); detailValues.id = 'qhjt-detail-values';
-    const detailClose = button('关闭人物详情', 'qhjt-detail-close', () => { detail.hidden = true; });
-    detail.append(node('h3', '人物详情'), node('p', '此处仅查看人物状态，行动仍由当前操作角色执行。'), detailValues, detailClose);
+    const inventoryList = node('div', undefined, 'qhjt-card-grid'); inventoryList.id = 'qhjt-inventory-list';
+    const inventoryFilter = select('qhjt-inventory-filter', '物资分类', pages.inventory);
+    for (const [id, label] of [['all', '全部'], ['food', '食物'], ['ingredient', '食材'], ['material', '材料'], ['equipment', '装备'], ['other', '其他']]) { const option = node('option', label); option.value = id; inventoryFilter.append(option); }
+    inventoryFilter.value = 'all'; listen(inventoryFilter, 'change', handlers.update);
+    const inventoryDetail = node('section', undefined, 'qhjt-card'); inventoryDetail.id = 'qhjt-inventory-detail'; inventoryDetail.hidden = true;
+    const addInventory = button('手动添加物资', 'qhjt-add-inventory', handlers.addInventory);
+    pages.inventory.append(node('h3', '当前拥有物资'), inventoryList, addInventory, inventoryDetail);
+    const npcList = node('div', undefined, 'qhjt-npc-list'); npcList.id = 'qhjt-npc-list';
+    const npcDetail = node('section', undefined, 'qhjt-card'); npcDetail.id = 'qhjt-npc-detail'; npcDetail.hidden = true;
+    const addNpc = button('手动补录认识的人', 'qhjt-add-npc', handlers.addNpc);
+    pages.npcs.append(node('h3', '当前认识的人'), npcList, addNpc, npcDetail);
     const nameForm = node('form'); nameForm.id = 'qhjt-name-form'; nameForm.hidden = true;
     const nameLabel = node('label', '人物名称', 'qhjt-label'); nameLabel.htmlFor = 'qhjt-name';
     const nameInput = node('input'); nameInput.id = 'qhjt-name'; nameInput.type = 'text'; nameInput.required = true;
@@ -89,13 +86,13 @@ export function mountFloatingPanel(status, handlers) {
     const nameCancel = button('取消', 'qhjt-name-cancel', () => finishName(null));
     const nameActions = node('div', undefined, 'qhjt-actions'); nameActions.append(nameOk, nameCancel);
     nameForm.append(nameLabel, nameInput, extraLabel, extraInput, nameActions);
-    pages.actors.append(node('p', '点击人物名称查看状态。当前操作角色不会随查看对象改变。'), addButtons, nameForm, actorList, detail);
+    pages.settings.append(nameForm);
     let resolveName;
     function finishName(value) {
         nameForm.hidden = true;
         const resolve = resolveName; resolveName = undefined; resolve?.(value);
     }
-    function requestName(label, initial = '', page = 'actors', extra = '') {
+    function requestName(label, initial = '', page = 'settings', extra = '') {
         finishName(null); pages[page].append(nameForm); selectTab(page);
         extraLabel.textContent = extra; extraLabel.hidden = extraInput.hidden = !extra; extraInput.value = '';
         nameLabel.textContent = label; nameInput.value = initial; nameForm.hidden = false;
@@ -108,13 +105,15 @@ export function mountFloatingPanel(status, handlers) {
         finishName(extraInput.hidden ? nameInput.value.trim() : { name: nameInput.value.trim(), extra: extraInput.value.trim() });
     });
     const actionList = node('div', undefined, 'qhjt-card-grid'); actionList.id = 'qhjt-action-list';
-    const actionScope = select('qhjt-action-scope', '行动范围', pages.actions);
+    const actionScope = select('qhjt-action-scope', '行动范围', pages.settings);
     for (const [value, text] of [['current', '当前位置行动'], ['all', '全部行动']]) {
         const option = node('option', text); option.value = value; actionScope.append(option);
     }
     actionScope.value = 'current'; listen(actionScope, 'change', handlers.update);
     const addAction = button('＋添加行动', 'qhjt-add-action', handlers.addAction);
-    pages.actions.append(actionList, addAction);
+    pages.state.append(node('h3', '当前可做'), actionList);
+    const allActions = node('div', undefined, 'qhjt-card-grid'); allActions.id = 'qhjt-all-actions';
+    pages.settings.append(node('h3', '行动纠错'), allActions, addAction);
     const locationCurrent = node('p'); locationCurrent.id = 'qhjt-location-current';
     const locationList = node('div', undefined, 'qhjt-card-grid'); locationList.id = 'qhjt-location-list';
     const addLocation = button('＋添加地点', 'qhjt-add-location', handlers.addLocation);
@@ -122,7 +121,15 @@ export function mountFloatingPanel(status, handlers) {
     pages.locations.append(locationCurrent, node('h3', '已发现地点'), locationList, addLocation, locationDetail);
     const world = select('qhjt-world', '当前聊天世界模板', pages.settings);
     listen(world, 'change', handlers.world);
-    pages.settings.append(node('p', '游戏模式：已开启'), node('p', 'AI设置、显示设置、存档管理：未来开放。'));
+    const syncRange = select('qhjt-sync-range', '同步消息范围', pages.settings);
+    for (const count of ['10', '30', '50', 'all']) { const option = node('option', count === 'all' ? '全部' : `最近 ${count} 条`); option.value = count; syncRange.append(option); }
+    syncRange.value = '30';
+    const sync = button('同步当前聊天', 'qhjt-sync-chat', () => handlers.sync(false));
+    const reanalyze = button('重新分析但不重复应用', 'qhjt-reanalyze', () => handlers.sync(true));
+    const cancelScan = button('取消扫描', 'qhjt-cancel-scan', handlers.cancelScan);
+    const pendingList = node('div'); pendingList.id = 'qhjt-pending-list';
+    const pending = node('details'); pending.append(node('summary', '待确认发现'), pendingList);
+    pages.settings.append(sync, reanalyze, cancelScan, pending);
     const discoveryHistory = node('details'); discoveryHistory.id = 'qhjt-discovery-history';
     const discoveryLog = node('div'); discoveryLog.id = 'qhjt-discovery-log';
     const undoDiscovery = button('撤销最近自动发现', 'qhjt-undo-discovery', handlers.undoDiscovery);
@@ -152,7 +159,7 @@ export function mountFloatingPanel(status, handlers) {
         entry.setAttribute('aria-expanded', 'true'); position(); close.focus();
     }
     function hide(focus = false) {
-        detail.hidden = true;
+        inventoryDetail.hidden = true; npcDetail.hidden = true;
         locationDetail.hidden = true;
         finishName(null); if (overlay.open) overlay.close();
         panel.hidden = true; unlockScroll(); entry.setAttribute('aria-expanded', 'false');
@@ -178,10 +185,11 @@ export function mountFloatingPanel(status, handlers) {
     const chat = document.getElementById('chat'); if (chat) observer?.observe(chat);
     const input = document.getElementById('form_sheld'); if (input) observer?.observe(input);
     selectTab('state'); position();
-    return { host, entry, overlay, panel, close, values, worldValues, actorValues, plus, minus, world,
+    return { host, entry, overlay, panel, close, values, worldValues, actorValues, world, settingsPage: pages.settings,
         actionList, actionScope, addAction, locationCurrent, locationList, locationDetail, addLocation, discoveryLog, undoDiscovery,
-        actorList, addCharacter, addUser, addCustom, control,
-        detail, detailValues, info, controller, requestName,
+        inventoryList, inventoryFilter, inventoryDetail, addInventory, npcList, npcDetail, addNpc,
+        allActions, syncRange, sync, reanalyze, cancelScan, pendingList,
+        info, controller, requestName,
         openFloating: open, closeFloating: hide, positionFloating: position,
         destroyFloating() { hide(); controller.abort(); observer?.disconnect(); host.remove(); overlay.remove(); },
     };

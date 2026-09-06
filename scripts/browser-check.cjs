@@ -5,140 +5,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const root = path.resolve(__dirname, '..');
-const fixture = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><style>
-*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font:16px sans-serif;background:#222;color:#eee}#top-settings-holder{position:fixed;top:0;height:48px;width:100%;background:#444}#sheld{position:fixed;top:48px;bottom:0;width:100%;display:flex;flex-direction:column}#chat{flex:1;overflow:auto;min-height:0}#form_sheld{height:90px;flex-shrink:0;background:#333}#extensions_settings2{position:absolute;left:0;top:50px;width:250px;background:#222;z-index:5}#extensions_settings2[hidden]{display:none}
-</style></head><body><nav id="top-settings-holder">Mock host navigation</nav><section id="sheld"><div id="chat"><div style="height:2000px">Mock chat</div></div><div id="form_sheld">Mock input / send</div></section><div id="extensions_settings2"></div>
-<script type="module">
-const events={}, metadataA={}, metadataB={}, messages=[]; let metadata=metadataA, chatId='A';
-window.SillyTavern={getContext:()=>({characterId:0,characters:[{name:'砚绒',avatar:'yanrong.png'}],name1:'我',chat:messages,chatId,chatMetadata:metadata,extensionSettings:settings,saveMetadata:async()=>{},saveSettingsDebounced:()=>{},eventTypes:{APP_INITIALIZED:'init',CHAT_CHANGED:'chat',GENERATION_AFTER_COMMANDS:'start',MESSAGE_RECEIVED:'received',GENERATION_ENDED:'end',GENERATION_STOPPED:'stop'},eventSource:{on:(id,fn)=>{events[id]=fn}}})};
-const settings={}; window.confirm=()=>true;
-const check=(value,message)=>{if(!value)throw Error(message)};
-const get=id=>document.getElementById(id);
-const delay=()=>new Promise(resolve=>setTimeout(resolve,30));
-const click=async id=>{get(id).click();await delay()};
-const change=async(id,value)=>{get(id).value=value;get(id).dispatchEvent(new Event('change'));await delay()};
-const on=async()=>{get('qhjt-game').checked=true;get('qhjt-game').dispatchEvent(new Event('change'));await delay()};
-try {
- if(sessionStorage.reloadState){
-  metadataA.qingheji_tavern=JSON.parse(sessionStorage.reloadState);
-  get('extensions_settings2').remove();get('sheld').remove();
-  await import('/index.js');await delay();
-  check(get('qhjt-host')?.parentElement===document.body&&!get('qhjt-host').hidden,'Saved enabled chat visible on refresh without anchors or init event');
-  check(Object.keys(metadataA.qingheji_tavern.actions).length===1,'Refresh keeps actions');
-  check(Object.keys(metadataA.qingheji_tavern.locations).length===1,'Refresh keeps locations');
-  check(document.querySelectorAll('#qhjt-entry').length===1,'Refresh has one launcher');
-  window.__result={passed:true,reloaded:true};
- } else {
- const detachedSettings=get('extensions_settings2'), detachedChat=get('sheld');
- detachedSettings.remove();detachedChat.remove();
- await import('/index.js');
- check(get('qhjt-host')?.parentElement===document.body,'Initial mount requires neither settings nor chat');
- document.body.append(detachedSettings,detachedChat);await delay();
- check(get('qhjt-settings')?.parentElement===detachedSettings,'Late settings attachment');
- await events.init(); await events.init();
- check(innerWidth===320,'Must test an actual 320px viewport');
- check(get('qhjt-host').hidden,'OFF hides entry');
- check(get('qhjt-settings').querySelectorAll('select,button').length===0,'Settings must contain no management controls');
- await on(); get('extensions_settings2').hidden=true;
- const entry=get('qhjt-entry').getBoundingClientRect(), input=get('form_sheld').getBoundingClientRect();
- check(entry.width>=44&&entry.height>=44,'Entry touch target');
- check(input.top-entry.bottom>=79,'Entry must clear input by 80px');
- check(entry.top>=48,'Entry must clear navigation');
- get('sheld').style.transform='translateX(0)';window.dispatchEvent(new Event('resize'));await delay();
- check(input.top-get('qhjt-entry').getBoundingClientRect().bottom>=79,'Translated chat container entry clearance');
- get('sheld').style.transform='';window.dispatchEvent(new Event('resize'));await delay();
- await click('qhjt-entry');
- check(get('qhjt-overlay').open,'Open modal');
- await click('qhjt-tab-actions');
- check(get('qhjt-action-list').textContent==='当前聊天尚未解锁自定义行动。','Empty action state');
- await click('qhjt-add-action');get('qhjt-name').value='长行动名称'.repeat(25);await click('qhjt-name-ok');
- check(Object.keys(metadata.qingheji_tavern.actions).length===1,'Action form saves immediately');
- check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'Long action fits 320px');
- check(document.documentElement.scrollWidth<=320,'No page horizontal overflow');
- check(get('qhjt-panel').getBoundingClientRect().width<=320,'Sheet fits viewport');
- check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'No sheet horizontal overflow');
- check(get('chat').style.overflow==='hidden','Lock background chat scroll');
- await click('qhjt-close'); check(!get('qhjt-overlay').open,'Close button');
- check(get('chat').style.overflow==='','Restore chat scroll styles');
- await click('qhjt-entry'); get('qhjt-overlay').dispatchEvent(new MouseEvent('click',{bubbles:true}));await delay();
- check(!get('qhjt-overlay').open,'Backdrop close');
- await click('qhjt-entry');
- const system=document.createElement('dialog');system.textContent='Mock system popup';document.body.append(system);system.showModal();
- check(document.elementFromPoint(160,370)===system||system.contains(document.elementFromPoint(160,370)),'Later system modal stays on top');system.close();system.remove();
- await click('qhjt-tab-settings');await change('qhjt-world','modern_city');
- await click('qhjt-tab-state');await click('qhjt-control');
- check(metadata.qingheji_tavern.controlMode==='user','Switch to User');
- check(!get('qhjt-active'),'No ordinary protagonist selector');
- await click('qhjt-tab-actors');await click('qhjt-add-character');
- await click('qhjt-add-custom');get('qhjt-name').value='超长自定义人物名称'.repeat(15);await click('qhjt-name-ok');
- check(Object.keys(metadata.qingheji_tavern.actors).length===3,'Add three sources');
- await click('qhjt-inspect-actor_1');check(metadata.qingheji_tavern.controlMode==='user','Viewing card does not transfer control');
- await click('qhjt-inspect-actor_3');await click('qhjt-tab-state');await click('qhjt-plus');
- check(metadata.qingheji_tavern.actors.actor_2.currency.amount===1100,'User currency');
- check(metadata.qingheji_tavern.actors.actor_1.currency.amount===1000&&metadata.qingheji_tavern.actors.actor_3.currency.amount===1000,'NPCs untouched');
- check(get('qhjt-summary').textContent.includes('我'),'Summary uses controlled actor');
- check(get('qhjt-overlay').open,'Edits keep sheet open');
- await click('qhjt-tab-actors');
- await click('qhjt-detail-close');await click('qhjt-inspect-actor_1');
- check(metadata.qingheji_tavern.controlMode==='user','Reopening detail preserves control');
- check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'Long name cannot widen sheet');
- await click('qhjt-add-custom');
- const focus=get('qhjt-name').getBoundingClientRect(), scroll=get('qhjt-scroll').getBoundingClientRect();
- check(focus.top>=scroll.top-1&&focus.bottom<=scroll.bottom+1,'Name input scrolled into view');
- await click('qhjt-name-cancel');
- await click('qhjt-tab-locations');await click('qhjt-add-location');
- get('qhjt-name').value='后山';get('qhjt-name-extra').value='逐步发现的地点';await click('qhjt-name-ok');
- const locationId=Object.keys(metadata.qingheji_tavern.locations)[0];
- check(Boolean(locationId),'Manual location created');
- await click('qhjt-location-'+locationId);
- for(const [field,name] of [['resources','柴火'],['resources','野菜'],['capabilities','采集'],['services','休息']]){
-  await click('qhjt-add-'+field);get('qhjt-name').value=name;await click('qhjt-name-ok');
- }
- check(metadata.qingheji_tavern.locations[locationId].resources.length===2,'Incremental resources');
- await click('qhjt-associate-action');await click('qhjt-set-location');
- check(metadata.qingheji_tavern.actors.actor_2.locationId===locationId&&metadata.qingheji_tavern.actors.actor_1.locationId===null,'Independent actor location');
- await click('qhjt-tab-actions');
- const firstButton=get('qhjt-action-list').querySelector('button');
- check(firstButton.getBoundingClientRect().width>=100,'Action name gets useful horizontal width');
- const deletion=get('qhjt-action-list').querySelectorAll('button')[1];
- check(deletion.getBoundingClientRect().height<=48,'Delete label fits horizontally');
- check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'Location/action cards fit mobile');
- await click('qhjt-tab-state');await click('qhjt-control');await click('qhjt-tab-actions');
- check(!get('qhjt-action-list').querySelector('button'),'Current location filters linked action');
- await change('qhjt-action-scope','all');check(Boolean(get('qhjt-action-list').querySelector('button')),'All actions available');
- await events.start('normal');messages.push({is_user:true,mes:'我们来到了集市。'},{is_user:false,mes:'这里允许摆摊赚钱。'});
- await events.end();await events.received(messages.length-1);await delay();
- check(Object.values(metadata.qingheji_tavern.locations).some(location=>location.label==='集市'&&location.visited),'Completed round discovers location');
- check(Object.values(metadata.qingheji_tavern.actions).some(action=>action.label==='摆摊赚钱'),'Completed round discovers action');
- const count=metadata.qingheji_tavern.discoveryLog.length;await events.end();check(metadata.qingheji_tavern.discoveryLog.length===count,'Round scanned once');
- await click('qhjt-tab-settings');await click('qhjt-undo-discovery');
- check(Object.keys(metadata.qingheji_tavern.locations).length===1&&Object.keys(metadata.qingheji_tavern.actions).length===1,'Undo removes auto entities and keeps manual data');
- metadata=metadataB;chatId='B';await events.chat();check(get('qhjt-host').hidden&&!get('qhjt-overlay').open,'B OFF clears A UI');
- await on();check(Object.keys(metadataB.qingheji_tavern.locations).length===0,'B has no A locations');
- metadata=metadataA;chatId='A';await events.chat();check(!get('qhjt-host').hidden,'A ON restored');
- const oldEntry=get('qhjt-entry');get('qhjt-host').remove();get('qhjt-overlay').remove();await delay();
- check(get('qhjt-entry')!==oldEntry&&!get('qhjt-host').hidden,'Observer repairs removed body UI');
- get('sheld').replaceWith(get('sheld').cloneNode(true));await delay();
- check(!get('qhjt-host').hidden,'Chat DOM rebuild preserves entry');
- const stableEntry=get('qhjt-entry');get('chat').append(document.createElement('p'));await delay();
- check(get('qhjt-entry')===stableEntry,'Ordinary DOM mutation does not recreate launcher');
- for(let i=0;i<3;i++)await events.chat();
- for(const id of ['qhjt-entry','qhjt-overlay','qhjt-panel'])check(document.querySelectorAll('#'+id).length===1,'No duplicate '+id);
- await click('qhjt-entry');
- get('qhjt-master').checked=false;get('qhjt-master').dispatchEvent(new Event('change'));await delay();
- check(!get('qhjt-entry')&&!get('qhjt-overlay'),'Master OFF unmounts');
- check(get('chat').style.overflow==='','Unmount unlocks background');
- get('qhjt-master').checked=true;get('qhjt-master').dispatchEvent(new Event('change'));await delay();
- await click('qhjt-entry');await click('qhjt-tab-actors');await click('qhjt-add-custom');
- sessionStorage.reloadState=JSON.stringify(metadataA.qingheji_tavern);
- window.__result={passed:true,width:innerWidth,sheetWidth:get('qhjt-panel').getBoundingClientRect().width};
- }
-} catch(error){window.__result={passed:false,error:error.stack}}
-</script></body></html>`;
+const fixture = fs.readFileSync(path.join(__dirname, 'browser-fixture.html'), 'utf8');
 async function main() {
     const executable = process.env.QHJT_CHROME || ['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(file=>fs.existsSync(file));
     if(!executable)throw Error('Set QHJT_CHROME to a local Chrome/Chromium executable.');
-    const allowed = new Set(['index.js','style.css','ui/floating-panel.js','core/game-state.js','core/actions.js','core/world-discovery.js','core/discovery-provider.js','ui/discovery-session.js','core/actor-sources.js','data/world-templates.js']);
+    const allowed = new Set(['index.js','style.css','ui/floating-panel.js','core/game-state.js','core/actions.js','core/semantic-state.js','core/semantic-scan.js','core/local-semantic.js','core/secondary-api.js','ui/secondary-settings.js','ui/knowledge-views.js','core/world-discovery.js','core/discovery-provider.js','ui/discovery-session.js','core/actor-sources.js','data/world-templates.js']);
     const server=http.createServer((req,res)=>{
         const name=(req.url||'/').slice(1);
         if(!name){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(fixture);return}
@@ -191,7 +62,7 @@ async function main() {
         await new Promise(resolve=>setTimeout(resolve,200));
         const reloaded=await call('Runtime.evaluate',{expression:'new Promise((resolve,reject)=>{const timer=setInterval(()=>{if(window.__result){clearInterval(timer);resolve(window.__result)}},30);setTimeout(()=>{clearInterval(timer);reject(Error("Reload timeout"))},5000)})',awaitPromise:true,returnByValue:true});
         if(!reloaded.result?.value?.passed||!reloaded.result.value.reloaded)throw Error('Refresh failed: '+JSON.stringify(reloaded));
-        console.log('PASS: real headless Chromium at 320x740 and 320x400, no horizontal overflow, visible name input/close, entry clearance, modal close/backdrop, system modal stacking, actor/world edits, A/B isolation, unmount/remount. Mock host only.');
+        console.log('PASS: real headless Chromium at 320x740 and 320x400, no horizontal overflow, inventory/NPC forms, full-width actions, sync/dedup, simulated API round scans, refresh persistence, A/B isolation and floating lifecycle. Mock host/API only.');
         await send('Browser.close');
     } finally {
         ws?.close();browser?.kill();server.closeAllConnections();server.close();

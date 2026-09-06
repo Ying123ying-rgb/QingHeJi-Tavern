@@ -1,10 +1,15 @@
 import { worldTemplates } from './data/world-templates.js';
-import { readState, needsMigration, isObject, getTemplate, addActor, inspectActor, setControlMode, resolveControlledActor, deleteActor, changeCurrency, resetWorld } from './core/game-state.js';
-import { currentCharacter, currentUser } from './core/actor-sources.js';
+import { readState, needsMigration, isObject, getTemplate, resolveControlledActor, resetWorld } from './core/game-state.js';
+import { currentCharacter } from './core/actor-sources.js';
 import { mountFloatingPanel } from './ui/floating-panel.js';
 import { addAction, removeAction, listActions, findAction } from './core/actions.js';
-import { applyWorldDelta, validateDiscovery, undoLatestDiscovery, worldId, discoveredLocations, actionsAtLocation } from './core/world-discovery.js';
-import { extractDiscoveryCandidates } from './core/discovery-provider.js';
+import { applyWorldDelta, undoLatestDiscovery, worldId, discoveredLocations, actionsAtLocation } from './core/world-discovery.js';
+import { prepareMessages, validateSemanticDelta, applyValidatedDelta } from './core/semantic-state.js';
+import { LocalSemanticProvider } from './core/local-semantic.js';
+import { SecondaryAIDiscoveryProvider, activeChannel } from './core/secondary-api.js';
+import { mountSecondarySettings } from './ui/secondary-settings.js';
+import { renderKnowledge } from './ui/knowledge-views.js';
+import { semanticInput, syncBatches } from './core/semantic-scan.js';
 import { createDiscoverySession } from './ui/discovery-session.js';
 
 (() => {
@@ -18,6 +23,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
     let renderedIdentity;
     let discoverySession;
     let inspectedLocationId = null;
+    let scanController, scanning = false;
     const migrationAttempts = new WeakSet();
 
     function identity(ctx) {
@@ -67,17 +73,21 @@ import { createDiscoverySession } from './ui/discovery-session.js';
         if (ui.mounted && ui.host.isConnected && ui.entry.isConnected && ui.panel.isConnected && ui.overlay.isConnected) return;
         unmount();
         const view = mountFloatingPanel(ui.status, {
-            open: openPanel, close: closePanel, world: changeWorld, add: addPerson,
+            open: openPanel, close: closePanel, world: changeWorld,
             update, addLocation: addPlace, undoDiscovery: undoDiscovery,
+            addInventory: () => editInventory(), addNpc: () => editNpc(), sync: syncHistory, cancelScan: cancelScan,
             addAction: async () => {
                 const expected = context();
-                const name = await ui.requestName('行动名称', '', 'actions');
+                const name = await ui.requestName('行动名称', '', 'settings');
                 if (name !== null) await editAction('add', name, expected);
             },
-            currency: delta => editActor(game => changeCurrency(game, delta, context())),
-            control: () => editActor(game => setControlMode(game, game.controlMode === 'user' ? 'character' : 'user', context())),
         });
         Object.assign(ui, view); ui.viewKeys = Object.keys(view); ui.mounted = true;
+        mountSecondarySettings(ui.settingsPage, {
+            get: () => context().extensionSettings[KEY]?.secondary ?? { channels: [], activeChannelId: null },
+            save: secondary => { cancelScan(); const ctx = context(); ctx.extensionSettings[KEY] = { ...ctx.extensionSettings[KEY], secondary }; ctx.saveSettingsDebounced(); },
+            notice, signal: ui.controller.signal,
+        });
         const unknown = element('option', '未识别模板（可重新选择）');
         unknown.value = ''; unknown.disabled = true; unknown.hidden = true; ui.world.append(unknown);
         for (const template of worldTemplates) {
@@ -103,14 +113,29 @@ import { createDiscoverySession } from './ui/discovery-session.js';
         ui.master.checked = pluginEnabled(ctx);
         ui.game.checked = info.valid && game.enabled;
         ui.master.disabled = busy;
-        ui.game.disabled = busy || !pluginEnabled(ctx) || !info.valid || !isObject(ctx.chatMetadata);
+        ui.game.disabled = busy || scanning || !pluginEnabled(ctx) || !info.valid || !isObject(ctx.chatMetadata);
         if (!pluginEnabled(ctx)) { unmount(); return; }
         mount();
         ui.world.disabled = ui.game.disabled;
         ui.world.value = getTemplate(game.world.templateId) ? game.world.templateId : '';
-        renderActors(ctx, game);
+        ui.actorController?.abort(); ui.actorController = new AbortController();
+        ui.inventoryDetail.hidden = true; ui.npcDetail.hidden = true;
+        renderKnowledge(game, ui, { button, element, userName: ctx.name1, editItem: item => editInventory(item, ctx), editNpc: (npc, field) => editNpc(npc, field, ctx) });
+        ui.addInventory.disabled = ui.addNpc.disabled = ui.game.disabled;
         renderActions(ctx, game);
         renderLocations(ctx, game);
+        ui.sync.disabled = ui.reanalyze.disabled = ui.game.disabled || !game.enabled;
+        ui.cancelScan.disabled = !scanning;
+        ui.pendingList.replaceChildren();
+        for (const item of game.pendingDiscoveries.filter(item => !item.ignored).slice(-50).reverse()) {
+            const row = element('div', undefined, 'qhjt-card');
+            row.append(element('p', `${item.value.label ?? item.value.name ?? item.value.text ?? item.kind}：${item.reason}`), element('p', item.ref.evidence));
+            const ignore = button('忽略', async () => {
+                if (!canEdit(context()) || context().chatMetadata !== ctx.chatMetadata) return;
+                const next = state(context()); const found = next.pendingDiscoveries.find(value => value.id === item.id); if (found) found.ignored = true;
+                await persist(context(), next);
+            }); ignore.disabled = ui.game.disabled; row.append(ignore); ui.pendingList.append(row);
+        }
         ui.info.textContent = `角色：${info.name}；characterId：${ctx.characterId ?? '无'}；聊天标识：${info.chatId ?? '无'}`;
         ui.host.hidden = !pluginEnabled(ctx) || !info.valid || !game.enabled;
         ui.positionFloating();
@@ -122,7 +147,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
 
     function canEdit(ctx) {
         const info = identity(ctx);
-        return !busy && pluginEnabled(ctx) && info.valid && isObject(ctx.chatMetadata)
+        return !busy && !scanning && pluginEnabled(ctx) && info.valid && isObject(ctx.chatMetadata)
             && ctx.chatMetadata === renderedMetadata && info.key === renderedIdentity;
     }
 
@@ -154,7 +179,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
                 else delete metadata[KEY];
             }
             if (context().chatMetadata === metadata) ui.status.textContent = '保存失败，请稍后重试。';
-            console.error('[酒馆人生模拟器] 保存失败', error);
+            console.error('[酒馆人生模拟器] 保存失败');
         } finally {
             busy = false;
             refresh();
@@ -194,17 +219,105 @@ import { createDiscoverySession } from './ui/discovery-session.js';
 
     function renderActions(ctx, game) {
         ui.actionList.replaceChildren();
-        const actions = ui.actionScope.value === 'all' ? listActions(game) : actionsAtLocation(game, resolveControlledActor(game, ctx)?.locationId);
-        if (!actions.length) ui.actionList.append(element('p', listActions(game).length ? '当前位置暂无行动，可查看“全部行动”。' : '当前聊天尚未解锁自定义行动。'));
+        ui.allActions.replaceChildren();
+        const actions = actionsAtLocation(game, resolveControlledActor(game, ctx)?.locationId);
+        if (!actions.length) ui.actionList.append(element('p', '当前没有已解锁行动。'));
         for (const action of actions) {
+            const launch = button(action.label, () => notice('尚未配置正式执行逻辑。'));
+            launch.disabled = ui.game.disabled; ui.actionList.append(launch);
+        }
+        for (const action of (ui.actionScope.value === 'all' ? listActions(game) : actions)) {
             const row = element('div', undefined, 'qhjt-card qhjt-action-card');
-            const launch = button(action.label, () => notice('该行动尚未配置执行逻辑。'));
+            const launch = button(action.label, () => notice('尚未配置正式执行逻辑。'));
             launch.disabled = action.enabled === false || ui.game.disabled;
             const remove = button('删除', () => editAction('remove', action.label, ctx));
             remove.disabled = ui.game.disabled;
-            row.append(launch, remove); ui.actionList.append(row);
+            row.append(launch, remove); ui.allActions.append(row);
         }
         ui.addAction.disabled = ui.game.disabled;
+    }
+
+    function cancelScan() { scanController?.abort(); discoverySession?.cancel(); }
+
+    async function scanMessages(expected, batches, reanalyze = false, turnId = null) {
+        if (scanning || busy || !pluginEnabled(expected) || !state(expected).enabled) return;
+        scanning = true; scanController = new AbortController(); const controller = scanController;
+        update(); let completed = 0;
+        const channel = activeChannel(expected.extensionSettings[KEY]?.secondary);
+        const provider = channel ? new SecondaryAIDiscoveryProvider({ ...channel }, { signal: controller.signal }) : new LocalSemanticProvider();
+        try {
+            for (const messages of batches) {
+                const current = context();
+                if (controller.signal.aborted || current.chatMetadata !== expected.chatMetadata || identity(current).key !== identity(expected).key || !pluginEnabled(current) || !state(current).enabled) break;
+                const snapshot = state(current), controlled = resolveControlledActor(snapshot, current);
+                const input = semanticInput(snapshot, current, messages, controlled);
+                notice(`正在${reanalyze ? '重新分析' : '同步'}当前聊天 ${completed + 1}/${batches.length}…`);
+                const raw = await provider.extractDiscoveryCandidates(input);
+                const latestContext = context();
+                if (controller.signal.aborted || latestContext.chatMetadata !== current.chatMetadata || identity(latestContext).key !== identity(current).key || !pluginEnabled(latestContext) || !state(latestContext).enabled) break;
+                const latest = state(latestContext);
+                if (resolveControlledActor(latest, latestContext)?.id !== controlled?.id) break;
+                const validated = validateSemanticDelta(raw, latest, input, { reanalyze });
+                const next = applyValidatedDelta(latest, validated, { source: channel ? 'secondary_ai' : 'auto' });
+                if (turnId) next.discoveryScan.lastTurnId = turnId;
+                if (!await persist(latestContext, next)) { notice('保存失败，已停止同步；本批未标记处理。'); return; }
+                completed++;
+            }
+            if (context().chatMetadata === expected.chatMetadata) notice(controller.signal.aborted ? '扫描已取消，已保存批次保留。' : `已处理 ${completed} 批。${reanalyze ? '重新分析结果仅进入待确认发现。' : '可查看物资、地点和人物。'}`);
+        } catch (error) {
+            if (context().chatMetadata === expected.chatMetadata) notice(error.message);
+        } finally {
+            scanning = false; if (scanController === controller) scanController = undefined;
+            update(); await discoverySession?.flush();
+        }
+    }
+
+    async function syncHistory(reanalyze) {
+        const ctx = context(); if (!canEdit(ctx) || !state(ctx).enabled) return;
+        try {
+            const batches = syncBatches(ctx.chat ?? [], state(ctx), ui.syncRange.value, reanalyze);
+            if (!batches.length) { notice('所选消息均已处理且未变更。'); return; }
+            await scanMessages(ctx, batches, reanalyze);
+        } catch (error) { notice(error.message); }
+    }
+
+    async function manualSemantic(raw, expected, correction) {
+        const ctx = context();
+        if (!canEdit(ctx) || !state(ctx).enabled || ctx.chatMetadata !== expected.chatMetadata || identity(ctx).key !== identity(expected).key) return;
+        try {
+            const game = state(ctx), input = semanticInput(game, ctx, [], resolveControlledActor(game, ctx));
+            if (correction && game.npcs[correction.id]) {
+                const npc = game.npcs[correction.id];
+                if (correction.field === 'appearance') npc.appearance.facts = [];
+                if (correction.field === 'personality') npc.personality = { confirmed: [], impressions: [] };
+                if (['likes', 'dislikes'].includes(correction.field)) npc.preferences[correction.field] = [];
+                if (correction.field === 'history') npc.history = [];
+            }
+            const next = applyValidatedDelta(game, validateSemanticDelta(raw, game, input, { manual: true }), { source: 'user' });
+            if (await persist(ctx, next)) notice('手动修正已保存。');
+        } catch (error) { notice(error.message); }
+    }
+
+    async function editInventory(item, expected = context()) {
+        if (!canEdit(context())) return;
+        const value = await ui.requestName(item ? '物资名称（修改数量）' : '物资名称', item?.label ?? '', 'inventory', '数量（留空表示未知）');
+        if (!value) return;
+        const known = value.extra !== '';
+        await manualSemantic({ inventory: { set: [{ ...(item ? { id: item.id } : {}), label: value.name, quantity: known ? Number(value.extra) : null, quantityKnown: known }] } }, expected);
+    }
+
+    async function editNpc(npc, field = 'appearance', expected = context()) {
+        if (!canEdit(context())) return;
+        if (!npc) {
+            const value = await ui.requestName('已认识人物的姓名或身份', '', 'npcs', '已知容貌（选填）'); if (!value) return;
+            await manualSemantic({ npcs: [{ name: value.name, status: 'known', appearance: value.extra ? [{ text: value.extra }] : [] }] }, expected); return;
+        }
+        const value = await ui.requestName('替换所选项资料（其他项保留）', field === 'name' ? npc.name : '', 'npcs'); if (value === null) return;
+        const update = { id: npc.id, name: field === 'name' ? value : npc.name, status: npc.known ? 'known' : 'encountered' };
+        if (['gender', 'age', 'occupation', 'identity'].includes(field)) update.basicInfo = { [field]: { text: value } };
+        else if (field === 'relationship') update.relationship = { text: value };
+        else if (field !== 'name') update[field] = [{ text: value, ...(field === 'personality' ? { strongEvidence: true } : {}) }];
+        await manualSemantic({ npcs: [update] }, expected, { id: npc.id, field });
     }
 
     async function editWorld(delta, expected = context()) {
@@ -283,7 +396,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
             const actionCards = element('div', undefined, 'qhjt-card-grid');
             const available = actionsAtLocation(game, location.id);
             if (!available.length) actionCards.append(element('p', '暂无已知行动。'));
-            for (const action of available) actionCards.append(button(action.label, () => notice('该行动尚未配置执行逻辑。')));
+            for (const action of available) actionCards.append(button(action.label, () => notice('尚未配置正式执行逻辑。')));
             ui.locationDetail.append(actionCards);
             const controls = element('div', undefined, 'qhjt-card-grid');
             for (const [field, label] of [['capabilities', '＋添加功能'], ['resources', '＋添加资源'], ['services', '＋添加服务']]) {
@@ -392,89 +505,6 @@ import { createDiscoverySession } from './ui/discovery-session.js';
         return node;
     }
 
-    function editActor(command, expected = context()) {
-        const ctx = context();
-        if (!canEdit(ctx) || ctx.chatMetadata !== expected.chatMetadata || identity(ctx).key !== identity(expected).key) {
-            refresh(); return;
-        }
-        const game = state(ctx);
-        if (command(game) === false) { refresh(); return; }
-        return persist(ctx, game);
-    }
-
-    async function addPerson(type) {
-        const ctx = context();
-        if (!canEdit(ctx) || !getTemplate(state(ctx).world.templateId)) { refresh(); return; }
-        let descriptor;
-        if (type === 'character') descriptor = currentCharacter(ctx);
-        else if (type === 'user') descriptor = currentUser(ctx);
-        else {
-            const name = await ui.requestName('人物名称');
-            if (name === null || !name.trim()) return;
-            descriptor = { name: name.trim(), sourceType: 'custom', sourceId: null };
-        }
-        if (!descriptor) { ui.status.textContent = '当前没有可识别的角色卡，可添加“我”或自定义人物。'; return; }
-        return editActor(game => {
-            if (!addActor(game, descriptor)) { ui.status.textContent = '该来源的人物已在当前聊天中。'; return false; }
-        }, ctx);
-    }
-
-    function removePerson(id, expected) {
-        const ctx = context();
-        if (!canEdit(ctx) || ctx.chatMetadata !== expected.chatMetadata || identity(ctx).key !== identity(expected).key) return;
-        const actor = state(ctx).actors[id];
-        if (id === resolveControlledActor(state(ctx), ctx)?.id) return;
-        if (!actor || !globalThis.confirm(`删除人物“${actor.name}”及其模拟状态？此操作不会修改角色卡或聊天记录。`)) return;
-        return editActor(game => deleteActor(game, id, ctx), expected);
-    }
-
-    async function renameUser(id, expected) {
-        if (context().chatMetadata !== expected.chatMetadata || !canEdit(context())) return;
-        const actor = state(context()).actors[id];
-        if (actor?.sourceType !== 'user') return;
-        const name = await ui.requestName('玩家显示名称（仅当前聊天模拟人物）', actor.name);
-        if (name === null || !name.trim()) return;
-        return editActor(game => { if (!game.actors[id]) return false; game.actors[id].name = name.trim(); }, expected);
-    }
-
-    function renderActors(ctx, game) {
-        ui.actorController?.abort(); ui.actorController = new AbortController();
-        const disabled = ui.game.disabled;
-        const controlled = resolveControlledActor(game, ctx);
-        const actors = Object.values(game.actors);
-        ui.actorList.replaceChildren();
-        for (const actor of actors) {
-            const row = element('div', undefined, 'qhjt-actor-row');
-            const view = async () => {
-                if (!canEdit(context()) || context().chatMetadata !== ctx.chatMetadata || identity(context()).key !== identity(ctx).key) return;
-                ui.detail.hidden = false;
-                await editActor(value => inspectActor(value, actor.id), ctx);
-                if (ui.mounted && !ui.detail.hidden && context().chatMetadata === ctx.chatMetadata) {
-                    ui.detail.scrollIntoView({ block: 'nearest' });
-                }
-            };
-            const label = button(`${actor.id === controlled?.id ? '当前操作 · ' : ''}${actor.name}`, view, `qhjt-inspect-${actor.id}`);
-            label.className = 'qhjt-button qhjt-actor-name';
-            label.title = actor.name;
-            label.disabled = disabled;
-            const source = { character: '角色卡', user: 'User', custom: 'NPC / 自定义' }[actor.sourceType] ?? '其他来源';
-            const actions = element('div', undefined, 'qhjt-actions');
-            const remove = button('删除', () => removePerson(actor.id, ctx));
-            remove.disabled = disabled || actor.id === controlled?.id;
-            if (actor.id !== controlled?.id) actions.append(remove);
-            if (actor.sourceType === 'user') {
-                const rename = button('修改显示名称', () => renameUser(actor.id, ctx));
-                rename.disabled = disabled; actions.append(rename);
-            }
-            row.append(label, element('small', source), actions); ui.actorList.append(row);
-        }
-        ui.addCharacter.disabled = disabled || !currentCharacter(ctx) || !getTemplate(game.world.templateId);
-        ui.addUser.disabled = ui.addCustom.disabled = disabled || !getTemplate(game.world.templateId);
-        ui.plus.disabled = ui.minus.disabled = disabled || !controlled;
-        ui.control.disabled = disabled;
-        ui.control.textContent = game.controlMode === 'user' ? '跟随当前角色' : '切换到我';
-    }
-
     function rows(node, values) {
         node.replaceChildren();
         for (const [label, value] of values) node.append(element('dt', label), element('dd', value));
@@ -483,8 +513,8 @@ import { createDiscoverySession } from './ui/discovery-session.js';
     function renderPanel(ctx, game) {
         const actor = resolveControlledActor(game, ctx);
         rows(ui.values, [
-            ['世界', getTemplate(game.world.templateId)?.displayName ?? game.world.templateId],
-            ['当前操作角色', actor?.name ?? '当前无可识别角色卡'],
+            ['当前世界', getTemplate(game.world.templateId)?.displayName ?? game.world.templateId],
+            ['当前所在地', game.locations[actor?.locationId]?.label ?? '未知'],
         ]);
         rows(ui.worldValues, [
             [game.calendar.dateLabel, game.calendar.date],
@@ -494,14 +524,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
             ['当前所在', game.locations[actor.locationId]?.label ?? '未知'],
             [actor.currency.label, `${actor.currency.symbol}${actor.currency.amount}`],
             ...actor.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
-        ] : [['提示', '当前无可识别角色卡，可点击“切换到我”。']]);
-        const inspected = game.actors[game.inspectedActorId];
-        rows(ui.detailValues, inspected ? [
-            ['当前所在', game.locations[inspected.locationId]?.label ?? '未知'],
-            ['正在查看', inspected.name], ['身份', inspected.id === resolveControlledActor(game, ctx)?.id ? '当前操作角色' : 'NPC（仅查看）'],
-            [inspected.currency.label, `${inspected.currency.symbol}${inspected.currency.amount}`],
-            ...inspected.stats.map(stat => [stat.label, `${stat.value}/${stat.max}`]),
-        ] : [['提示', '请点击人物名称查看详情。']]);
+        ] : [['提示', '当前状态尚未初始化。']]);
     }
 
     function openPanel() {
@@ -526,7 +549,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
         settingsRoot?.append(settings);
         ui = { master: master.input, game: game.input, status, settings, mounted: false };
         master.input.addEventListener('change', () => {
-            discoverySession?.cancel();
+            cancelScan();
             const ctx = context();
             const existing = ctx.extensionSettings[KEY];
             ctx.extensionSettings[KEY] = { ...(isObject(existing) ? existing : {}), enabled: master.input.checked };
@@ -552,7 +575,7 @@ import { createDiscoverySession } from './ui/discovery-session.js';
         return;
     }
     const chatChanged = () => {
-        discoverySession?.cancel(); inspectedLocationId = null;
+        cancelScan(); inspectedLocationId = null;
         if (ui) {
             closePanel();
             ui.status.textContent = '已切换聊天，游戏状态来自当前聊天。';
@@ -563,23 +586,13 @@ import { createDiscoverySession } from './ui/discovery-session.js';
     for (const name of new Set([events.CHAT_CHANGED, events.CHARACTER_SELECTED, events.CHARACTER_EDITED].filter(Boolean))) ctx.eventSource.on(name, chatChanged);
     ctx.eventSource.on(events.APP_INITIALIZED, initialize);
     discoverySession = createDiscoverySession({
-        context, identity, read: state, busy: () => busy,
+        context, identity, read: state, busy: () => busy || scanning,
         enabled: ctx => Boolean(ui) && pluginEnabled(ctx) && identity(ctx).valid && state(ctx).enabled,
         onError: error => notice(`自动发现未保存：${error.message}`),
-        scan: async ({ ctx: expected, turnId, messages }) => {
-            const snapshot = state(expected);
-            const actor = resolveControlledActor(snapshot, expected);
-            const candidate = await extractDiscoveryCandidates({ worldTemplate: getTemplate(snapshot.world.templateId),
-                locations: snapshot.locations, actions: snapshot.actions, controlledActor: actor, messages });
-            const current = context();
-            if (!canEdit(current) || !state(current).enabled || current.chatMetadata !== expected.chatMetadata || identity(current).key !== identity(expected).key) return;
-            const latest = state(current);
-            if (resolveControlledActor(latest, current)?.id !== actor?.id || latest.discoveryScan.lastTurnId === turnId) return;
-            const delta = validateDiscovery(candidate, latest, { source: 'auto' });
-            const next = applyWorldDelta(latest, delta, { source: 'auto', turnId });
-            next.discoveryScan.lastTurnId = turnId;
-            const count = next.discoveryLog.length - latest.discoveryLog.length;
-            if (await persist(current, next) && count && context().chatMetadata === current.chatMetadata) notice('已记录本轮明确的世界发现，可在设置中查看或撤销。');
+        scan: async ({ ctx: expected, turnId }) => {
+            const messages = prepareMessages(expected.chat ?? []);
+            const roundId = messages.at(-1)?.roundId;
+            if (roundId) await scanMessages(expected, [messages.filter(message => message.roundId === roundId)], false, turnId);
         },
     });
     if (events.GENERATION_AFTER_COMMANDS && events.MESSAGE_RECEIVED && events.GENERATION_ENDED) {

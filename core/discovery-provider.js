@@ -36,7 +36,8 @@ export class LocalDiscoveryProvider extends DiscoveryProvider {
                     const subjects = ['我们', ...(actor?.name ? [escape(actor.name)] : [])];
                     if ((message.role === 'user' && actor?.sourceType === 'user') || (message.role === 'assistant' && actor?.sourceType === 'character')) subjects.push('我');
                     const subject = `(?:${subjects.join('|')})`;
-                    const arrival = new RegExp(`^${subject}(?:终于|已经|现已)?(?:来到了|到达了|进入了|来到|到达|进入)(.+)$`, 'u').exec(clause);
+                    const arrival = new RegExp(`^${subject}(?:终于|已经|现已)?(?:来到了|到达了|进入了|来到|到达|进入)(.+)$`, 'u').exec(clause)
+                        ?? /^(?:我|我们)?在([\p{L}\p{N}_ -]{1,24})(?:转了转|逛了逛|活动了|停留了|走了走)$/u.exec(clause);
                     const discovery = new RegExp(`^${subject}(?:终于|已经)?发现了(?:地点|一处地点)[：:]?(.+)$`, 'u').exec(clause);
                     const match = arrival ?? discovery;
                     if (match && actor && shortName.test(match[1]) && !/的|了|可以|允许|并且|然后|正在|正要|之后|之前|时候|期间/u.test(match[1])) {

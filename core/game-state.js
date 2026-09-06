@@ -92,12 +92,13 @@ export function createState(templateId = DEFAULT_TEMPLATE_ID, enabled = false) {
         schemaVersion: 5, enabled: base.enabled, world: base.world,
         calendar: base.calendar, worldState: {}, controlMode: 'character', inspectedActorId: null,
         actors: {}, nextActorNumber: 1, actions: {}, locations: {}, discoveryLog: [], discoveryScan: {},
+        inventory: {}, npcs: {}, processedMessageIds: {}, pendingDiscoveries: [], semanticEvents: {},
     };
 }
 
 export function needsMigration(saved) {
     if (!isObject(saved)) return false;
-    if (isObject(saved.actors)) return !isObject(saved.locations) || !Array.isArray(saved.discoveryLog) || !isObject(saved.actions) || !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
+    if (isObject(saved.actors)) return !isObject(saved.inventory) || !isObject(saved.npcs) || !isObject(saved.processedMessageIds) || !Array.isArray(saved.pendingDiscoveries) || !isObject(saved.locations) || !Array.isArray(saved.discoveryLog) || !isObject(saved.actions) || !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
     return !Object.hasOwn(saved, 'actors')
         && (isLegacyState(saved) || Object.hasOwn(saved, 'currency') || Object.hasOwn(saved, 'stats'));
 }
@@ -122,6 +123,7 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
         delete result.activeActorId;
         result.nextActorNumber = 2;
         for (const key of personalFields) delete result[key];
+        result.inventory = {};
         return result;
     }
     const result = { ...createState(getTemplate(saved.world?.templateId)?.id), ...copy(saved) };
@@ -134,6 +136,8 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
     result.locations = isObject(saved.locations) ? copy(saved.locations) : {};
     result.discoveryLog = Array.isArray(saved.discoveryLog) ? copy(saved.discoveryLog) : [];
     result.discoveryScan = isObject(saved.discoveryScan) ? copy(saved.discoveryScan) : {};
+    for (const key of ['inventory', 'npcs', 'processedMessageIds', 'semanticEvents']) result[key] = isObject(saved[key]) ? copy(saved[key]) : {};
+    result.pendingDiscoveries = Array.isArray(saved.pendingDiscoveries) ? copy(saved.pendingDiscoveries) : [];
     for (const action of Object.values(result.actions)) if (isObject(action) && !Array.isArray(action.locationIds)) action.locationIds = [];
     result.actors = {};
     for (const [id, actor] of Object.entries(isObject(saved.actors) ? saved.actors : {})) {
@@ -151,7 +155,7 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
     result.schemaVersion = Math.max(5, number(saved.schemaVersion, 5));
     delete result.activeActorId;
     delete result.playerActorId;
-    for (const key of personalFields) delete result[key];
+    for (const key of personalFields) if (key !== 'inventory') delete result[key];
     return result;
 }
 
@@ -223,6 +227,7 @@ export function resetWorld(game, templateId) {
     result.locations = copy(game.locations ?? {});
     result.discoveryLog = copy(game.discoveryLog ?? []);
     result.discoveryScan = copy(game.discoveryScan ?? {});
+    for (const key of ['inventory', 'npcs', 'processedMessageIds', 'pendingDiscoveries', 'semanticEvents']) result[key] = copy(game[key] ?? (key === 'pendingDiscoveries' ? [] : {}));
     result.nextActorNumber = game.nextActorNumber;
     for (const actor of Object.values(game.actors)) {
         result.actors[actor.id] = createActor(templateId, actor, actor.id);

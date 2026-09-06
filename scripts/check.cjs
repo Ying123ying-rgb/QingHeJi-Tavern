@@ -9,7 +9,7 @@ if (!vm.SourceTextModule) {
 }
 const root = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-assert.equal(manifest.version, '0.2.0');
+assert.equal(manifest.version, '0.3.0');
 assert.equal(manifest.display_name, '酒馆人生模拟器');
 assert.equal(manifest.minimum_client_version, '1.18.0');
 assert.equal(manifest.loading_order, 100);
@@ -67,7 +67,7 @@ const ctx = () => ({ characterId, characters, groupId, name1: '我', chatId, cha
 });
 const windowEvents = new Node('window');
 const sandbox = vm.createContext({ SillyTavern: { getContext: ctx }, document: { createElement: create, getElementById: get, body, documentElement: html },
-    AbortController, innerHeight: 740, innerWidth: 320, addEventListener: windowEvents.addEventListener.bind(windowEvents),
+    AbortController, URL, setTimeout, clearTimeout, innerHeight: 740, innerWidth: 320, addEventListener: windowEvents.addEventListener.bind(windowEvents),
     console: { error() {} }, toastr: { info: message => notices.push(message) },
     confirm: message => { confirmations.push(message); onConfirm(); return confirmed; },
     prompt: () => { onPrompt(); return prompted; },
@@ -77,7 +77,7 @@ function load(file) {
     assert(file.startsWith(root + path.sep));
     if (!modules.has(file)) {
         const source = fs.readFileSync(file, 'utf8');
-        assert(!/\b(?:fetch|XMLHttpRequest|generateRaw|generateQuietPrompt|sendSystemMessage|writeExtensionField|saveWorldInfo|openCharacterChat|selectCharacterById)\s*\(/.test(source));
+        assert(!/\b(?:XMLHttpRequest|generateRaw|generateQuietPrompt|sendSystemMessage|writeExtensionField|saveWorldInfo|openCharacterChat|selectCharacterById)\s*\(/.test(source));
         modules.set(file, new vm.SourceTextModule(source, { context: sandbox, identifier: file }));
     }
     return modules.get(file);
@@ -160,219 +160,21 @@ async function run() {
     const empty = createState();
     assert.equal(resolveControlledActor(empty, {}), null);
     setControlMode(empty, 'user', {}); assert.equal(resolveControlledActor(empty, {}).name, '我');
-    await listeners.init(); await listeners.init();
-    const answerName = () => {
-        if (get('qhjt-name-form')?.hidden !== false) return;
-        onPrompt();
-        if (get('qhjt-name-form')?.hidden !== false) return;
-        if (prompted === null) get('qhjt-name-cancel').events.click();
-        else {
-            get('qhjt-name').value = prompted;
-            get('qhjt-name-form').events.submit({ preventDefault() {} });
-            if (!prompted.trim()) get('qhjt-name-cancel').events.click();
-        }
-    };
-    const click = async id => { assert(!get(id).disabled, id); const pending = get(id).events.click(); answerName(); await pending; };
-    const choose = async (id, value) => { get(id).value = value; await get(id).events.change(); };
-    const game = () => metadata[KEY];
-    const switchChat = async (id, data) => { chatId = id; metadata = data; await listeners.chat(); };
-    const enable = async () => { get('qhjt-game').checked = true; await get('qhjt-game').events.change(); };
-    const rowValues = id => {
-        const children = get(id).children; const result = {};
-        for (let i = 0; i < children.length; i += 2) result[children[i].textContent] = children[i + 1].textContent;
-        return result;
-    };
-    assert.equal(saves, 0); assert.equal(get('qhjt-host').hidden, true);
-    assert.equal(get('qhjt-settings').children.length, 4);
-    assert.equal(get('qhjt-active'), undefined);
-    await enable();
-    assert.equal(get('qhjt-overlay').open, true);
-    assert.equal(get('qhjt-onboarding'), undefined);
-    assert.equal(game().controlMode, 'character');
-    assert.equal(rowValues('qhjt-summary')['当前操作角色'], '<砚绒>');
-    await choose('qhjt-world', 'modern_city');
-    const yanrongId = resolveControlledActor(game(), ctx()).id;
-    await click('qhjt-control');
-    const playerId = resolveControlledActor(game(), ctx()).id;
-    assert.equal(game().actors[playerId].name, '我');
-    assert.equal(get('qhjt-control').textContent, '跟随当前角色');
-    await click('qhjt-control');
-    assert.equal(resolveControlledActor(game(), ctx()).id, yanrongId);
-    assert.equal(get('qhjt-control').textContent, '切换到我');
-    await click('qhjt-control');
-    await click('qhjt-tab-actors');
-    await click('qhjt-add-character'); await click('qhjt-add-user'); // no duplicates
-    prompted = '洛冉'; await click('qhjt-add-custom');
-    const ids = Object.keys(game().actors); assert.equal(ids.length, 3);
-    const luoranId = ids[2];
-    const calendar = plain(game().calendar);
-    await click('qhjt-inspect-' + yanrongId);
-    assert.equal(resolveControlledActor(game(), ctx()).id, playerId);
-    assert.equal(game().inspectedActorId, yanrongId);
-    assert.equal(rowValues('qhjt-detail-values')['正在查看'], '<砚绒>');
-    assert.equal(rowValues('qhjt-summary')['当前操作角色'], '我');
-    assert.equal(get('qhjt-actor-detail').hidden, false);
-    await click('qhjt-inspect-' + luoranId);
-    assert.equal(resolveControlledActor(game(), ctx()).id, playerId);
-    await click('qhjt-tab-state'); await click('qhjt-plus');
-    assert.equal(game().actors[playerId].currency.amount, 1100);
-    assert.equal(game().actors[luoranId].currency.amount, 1000);
-    assert.equal(game().actors[yanrongId].currency.amount, 1000);
-    assert.equal(rowValues('qhjt-actor-values')['余额'], '¥1100');
-    assert.equal(rowValues('qhjt-detail-values')['余额'], '¥1000');
-    equal(game().calendar, calendar);
-    await click('qhjt-tab-actors'); await click('qhjt-detail-close');
-    assert.equal(get('qhjt-actor-detail').hidden, true);
-    await click('qhjt-inspect-' + luoranId);
-    assert.equal(resolveControlledActor(game(), ctx()).id, playerId);
-    await click('qhjt-close'); await click('qhjt-entry');
-    assert.equal(resolveControlledActor(game(), ctx()).id, playerId);
-    assert.equal(get('qhjt-actor-detail').hidden, true);
-    await click('qhjt-inspect-' + luoranId);
-    const savedA = metadata;
-    const beforeReload = plain(game());
-    await switchChat('A', plain(metadata)); equal(game(), beforeReload);
-    assert.equal(game().inspectedActorId, luoranId);
-    await click('qhjt-entry');
-    assert.equal(rowValues('qhjt-summary')['当前操作角色'], '我');
-    characters = [{ name: '洛冉', avatar: 'luoran.png' }];
-    await switchChat('B', {}); assert.equal(get('qhjt-host').hidden, true); await enable();
-    assert.equal(game().controlMode, 'character');
-    assert.equal(rowValues('qhjt-summary')['当前操作角色'], '洛冉');
-    const savedB = metadata;
-    await click('qhjt-plus');
-    assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 200);
-    await click('qhjt-control');
-    assert.equal(resolveControlledActor(game(), ctx()).name, '我');
-    assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 100);
-    characters = [card];
-    await switchChat('A', savedA);
-    assert.equal(game().controlMode, 'user');
-    assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 1100);
-    characters = [{ name: '洛冉', avatar: 'luoran.png' }];
-    await switchChat('B', savedB);
-    assert.equal(game().controlMode, 'user');
-    assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 100);
-    await click('qhjt-control');
-    assert.equal(resolveControlledActor(game(), ctx()).name, '洛冉');
-    assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 200);
-    characters = [card];
-    await switchChat('A', savedA);
-    const beforeWorld = plain(game()); confirmed = false;
-    await choose('qhjt-world', 'sci_fi'); equal(game(), beforeWorld);
-    confirmed = true; await choose('qhjt-world', 'sci_fi');
-    assert.equal(resolveControlledActor(game(), ctx()).id, playerId); assert.equal(game().inspectedActorId, luoranId);
-    for (const actor of Object.values(game().actors)) assert.equal(actor.currency.amount, 3000);
-    // Removing an inspected NPC cannot change the control mode.
-    const npcRow = get('qhjt-actors').children[2];
-    confirmed = false; await npcRow.children[2].children[0].events.click(); assert(game().actors[luoranId]);
-    confirmed = true; await npcRow.children[2].children[0].events.click();
-    assert.equal(game().actors[luoranId], undefined);
-    assert.equal(resolveControlledActor(game(), ctx()).id, playerId); assert.equal(game().inspectedActorId, playerId);
-    assert.equal(get('qhjt-actors').children[1].children[2].children.some(node => node.textContent === '删除'), false);
-    // Saving an action or migration must still roll back safely on failure.
-    save = async () => { throw new Error('offline'); };
-    const beforeFailure = plain(game()); await click('qhjt-plus'); equal(game(), beforeFailure);
-    const failed = { [KEY]: plain(oldMulti) }; const oldObject = failed[KEY];
-    await switchChat('failed-multi', failed); assert.equal(game(), oldObject);
-    await listeners.chat(); assert.equal(game(), oldObject);
-    save = async () => { saves++; };
-    const beforeMigration = saves;
-    await switchChat('old-multi', { [KEY]: plain(oldMulti) });
-    assert.equal(saves, beforeMigration + 1); assert.equal(resolveControlledActor(game(), ctx()).id, oldPlayer.id);
-    assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 4321);
-    await listeners.chat(); assert.equal(saves, beforeMigration + 1);
-    const legacy01 = { schemaVersion: 1, enabled: true, money: 0, date: '四月初二', time: '午时',
-        stamina: { current: 37, max: 120 }, satiety: { current: 0, max: 90 }, inventory: { saved: true } };
-    const legacy011 = { schemaVersion: 2, enabled: true, world: { templateId: 'modern_city', templateVersion: 1 },
-        calendar: { dateLabel: '日期', date: '12月31日', timeLabel: '时间', time: '23:59' }, worldState: { weather: 'rain' },
-        currency: { id: 'money', label: '余额', symbol: '¥', amount: 5123 }, stats: [{ id: 'energy', label: '精力', value: 31, max: 120 }],
-        skills: { old: 3 }, relationships: { friend: 5 } };
-    for (const old of [legacy01, legacy011]) {
-        assert(needsMigration(old)); const snapshot = plain(old);
-        await switchChat('legacy', { [KEY]: plain(old), unrelated: 'keep' });
-        assert.equal(game().schemaVersion, 5);
-        assert.equal(resolveControlledActor(game(), ctx()).id, 'actor_1'); assert.equal(game().inspectedActorId, 'actor_1');
-        const player = resolveControlledActor(game(), ctx());
-        if (old === legacy01) {
-            assert.equal(player.currency.amount, 0); assert.equal(player.stats[0].value, 37); assert.equal(player.stats[1].value, 0);
-            assert.equal(game().calendar.date, old.date); assert.equal(game().calendar.time, old.time); assert(player.inventory.saved);
-        } else {
-            equal(player.currency, old.currency); equal(player.stats, old.stats); equal(player.skills, old.skills);
-            equal(game().calendar, old.calendar); equal(game().worldState, old.worldState);
-        }
-        equal(old, snapshot); equal(readState(game()), game()); assert.equal(metadata.unrelated, 'keep');
-    }
-    // Delayed action/save, stale read-only detail and pending name input across chats.
-    const legacyChat = metadata;
-    let finish; save = () => new Promise(resolve => { finish = resolve; });
-    const pending = get('qhjt-plus').events.click();
-    await switchChat('queued', { [KEY]: plain(oldMulti) });
-    save = async () => { saves++; }; finish(); await pending;
-    assert.equal(resolveControlledActor(game(), ctx()).id, oldPlayer.id); assert.equal(resolveControlledActor(game(), ctx()).currency.amount, 4321);
-    const staleView = get('qhjt-inspect-' + oldNpc.id);
-    await switchChat('empty', {}); await staleView.events.click?.(); assert.equal(game(), undefined);
-    prompted = '不应添加'; onPrompt = () => { chatId = 'other'; metadata = {}; listeners.chat(); };
-    await click('qhjt-add-custom'); assert.equal(game(), undefined); onPrompt = () => {};
-    await switchChat('A', legacyChat); await click('qhjt-entry');
-    get('qhjt-overlay').events.click({ target: get('qhjt-overlay') }); assert.equal(get('qhjt-overlay').open, false);
-    assert.equal(chatNode.style.overflow, undefined);
-    get('qhjt-master').checked = false; await get('qhjt-master').events.change();
-    assert.equal(get('qhjt-host'), undefined); assert.equal(get('qhjt-overlay'), undefined);
-    assert.equal(windowEvents.events.resize, undefined);
-    get('qhjt-master').checked = true; await get('qhjt-master').events.change();
-    for (const id of ['qhjt-entry', 'qhjt-overlay', 'qhjt-panel']) assert.equal(nodes.filter(node => node.id === id && node.isConnected).length, 1);
-    assert.equal(get('qhjt-host').parentElement, body);
-    assert.equal(get('qhjt-overlay').parentElement, body);
+    await require('./ui-check.cjs')({ get, listeners, ctx, engine, modules, root, nodes, body, windowEvents,
+        setChat: (id, data) => { chatId=id; metadata=data; }, game: () => metadata[KEY],
+        setSave: fn => { save=fn; }, commands, notices, extensionSettings });
     const registry = modules.get(path.join(root, 'core/actions.js')).namespace;
-    equal(createState().actions, {});
-    const withoutActions = plain(game()); delete withoutActions.actions;
-    const normalized = readState(withoutActions);
-    equal(normalized.actions, {}); assert(needsMigration(withoutActions));
-    for (const key of ['world', 'actors', 'controlMode', 'calendar']) equal(normalized[key], withoutActions[key]);
-    const future = createState();
-    const custom = registry.addAction(future, '未来行动');
-    Object.assign(custom, { duration: 120, costs: { stamina: 10 }, requirements: [], effects: [], location: 'custom', cooldown: 2, aiRoute: 'secondary', handler: 'opaque', metadata: { version: 2 } });
-    equal(readState(future).actions, future.actions);
-    equal(resetWorld(future, 'modern_city').actions, future.actions);
-    const stableId = custom.id; registry.removeAction(future, custom.label);
-    assert.equal(registry.addAction(future, custom.label).id, stableId);
-    const command = value => commands.life.callback({}, value);
-    await switchChat('action-A', {}); await enable();
-    const actionA = metadata;
-    assert.equal(await command('action add 摆摊'), '');
-    assert.equal(registry.listActions(game()).length, 1);
-    await command('action add  摆摊  '); assert.equal(registry.listActions(game()).length, 1);
-    assert.match(notices.at(-1), /同名/);
-    await command('action add'); assert.match(notices.at(-1), /不能为空/);
-    await command('action list'); assert.equal(notices.at(-1), '摆摊');
-    await switchChat('action-B', {}); await enable();
-    const actionB = metadata; equal(game().actions, {});
-    prompted = '本地自定义'; await click('qhjt-add-action');
-    assert.equal(registry.listActions(game())[0].label, prompted);
-    await switchChat('action-A', actionA);
-    assert.equal(registry.listActions(game())[0].label, '摆摊');
-    const beforeExecute = plain(game());
-    get('qhjt-action-list').children[0].children[0].events.click();
-    assert.equal(notices.at(-1), '该行动尚未配置执行逻辑。'); equal(game(), beforeExecute);
-    confirmed = false; await command('action remove 摆摊'); assert.equal(registry.listActions(game()).length, 1);
-    confirmed = true; await command('action remove 摆摊'); equal(game().actions, {});
-    assert.equal(confirmations.at(-1), '确定从当前聊天移除行动‘摆摊’吗？');
-    await switchChat('action-B', actionB); assert.equal(registry.listActions(game()).length, 1);
-    const beforeActionFailure = plain(game()); save = async () => { throw Error('save failed'); };
-    await command('action add 保存失败'); equal(game(), beforeActionFailure); assert.match(notices.at(-1), /保存失败/);
-    save = async () => { saves++; };
-    assert.equal(extensionSettings[KEY].actions, undefined);
-    get('qhjt-host').remove(); await listeners.init();
-    for (const id of ['qhjt-entry', 'qhjt-overlay', 'qhjt-panel']) assert.equal(nodes.filter(node => node.id === id && node.isConnected).length, 1);
-    await switchChat(undefined, {}); assert.equal(get('qhjt-game').disabled, true);
-    await command('action add 无聊天'); assert.equal(game(), undefined);
-    assert.equal(JSON.stringify(card), originalCard); assert.equal(JSON.stringify(chat), originalChat);
-    assert.equal(JSON.stringify(worldTemplates), templateSnapshot);
     await require('./discovery-check.cjs')(engine, registry,
         modules.get(path.join(root, 'core/world-discovery.js')).namespace,
         modules.get(path.join(root, 'core/discovery-provider.js')).namespace,
         modules.get(path.join(root, 'ui/discovery-session.js')).namespace);
+    await require('./semantic-check.cjs')(engine,
+        modules.get(path.join(root, 'core/semantic-state.js')).namespace,
+        modules.get(path.join(root, 'core/local-semantic.js')).namespace,
+        modules.get(path.join(root, 'core/secondary-api.js')).namespace,
+        modules.get(path.join(root, 'core/semantic-scan.js')).namespace);
+    assert.equal(JSON.stringify(card), originalCard); assert.equal(JSON.stringify(chat), originalChat);
+    assert.equal(JSON.stringify(worldTemplates), templateSnapshot);
     console.log('PASS: character/user modes, automatic actors, chat following, independent states, NPC inspection, legacy player/active migration, templates, calendar, save rollback, syntax/paths and UI lifecycle.');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });

@@ -90,6 +90,11 @@
 #qhjt-overlay .qhjt-action-card { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 8px; margin: 0; }
 #qhjt-overlay .qhjt-action-card .qhjt-button, #qhjt-overlay .qhjt-card-grid > .qhjt-button { display: block; width: 100%; min-width: 0; writing-mode: horizontal-tb; word-break: normal; }
 #qhjt-overlay .qhjt-action-card .qhjt-button { min-height: 44px; }
+#qhjt-overlay .qhjt-npc-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin: 10px 0; }
+#qhjt-overlay .qhjt-npc-list .qhjt-button { display: block; width: 100%; text-align: left; writing-mode: horizontal-tb; }
+#qhjt-overlay input:not([type="checkbox"]), #qhjt-overlay select { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 44px; font-size: 16px; }
+#qhjt-overlay .qhjt-card p { white-space: pre-wrap; }
+#qhjt-overlay #qhjt-channel-form > .qhjt-button { margin: 8px 6px 8px 0; }
 #qhjt-overlay .qhjt-panel-header h3 { font-size: 0.95rem; }
 #qhjt-overlay .qhjt-actor-name { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #qhjt-overlay summary { min-height: 44px; padding: 10px 0; cursor: pointer; }

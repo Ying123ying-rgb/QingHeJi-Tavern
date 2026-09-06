@@ -1,0 +1,87 @@
+<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/style.css"><style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;font:16px sans-serif;background:#222;color:#eee}#top-settings-holder{position:fixed;top:0;height:48px;width:100%;background:#444}#sheld{position:fixed;top:48px;bottom:0;width:100%;display:flex;flex-direction:column}#chat{flex:1;overflow:auto;min-height:0}#form_sheld{height:90px;flex-shrink:0;background:#333}#extensions_settings2{position:absolute;left:0;top:50px;width:250px;background:#222;z-index:5}#extensions_settings2[hidden]{display:none}
+</style></head><body><nav id="top-settings-holder">Mock host navigation</nav><section id="sheld"><div id="chat"><div style="height:2000px">Mock chat</div></div><div id="form_sheld">Mock input / send</div></section><div id="extensions_settings2"></div>
+<script type="module">
+const events={}, metadataA={}, metadataB={}, messages=[], settings={}; let metadata=metadataA, chatId='A', requests=0, saving=false;
+window.SillyTavern={getContext:()=>({characterId:0,characters:[{name:'田园生活',avatar:'world.png'}],name1:'玩家',chat:messages,chatId,chatMetadata:metadata,extensionSettings:settings,
+ saveMetadata:async()=>{},saveSettingsDebounced:()=>{},eventTypes:{APP_INITIALIZED:'init',CHAT_CHANGED:'chat',GENERATION_AFTER_COMMANDS:'start',MESSAGE_RECEIVED:'received',GENERATION_ENDED:'end',GENERATION_STOPPED:'stop'},eventSource:{on:(id,fn)=>{events[id]=fn}}})};
+window.confirm=()=>true;
+const check=(value,message)=>{if(!value)throw Error(message)};
+const get=id=>document.getElementById(id), game=()=>metadata.qingheji_tavern;
+const delay=()=>new Promise(resolve=>setTimeout(resolve,30));
+const click=async id=>{check(get(id)&&!get(id).disabled,'Clickable '+id);get(id).click();await delay()};
+const change=async(id,value)=>{get(id).value=value;get(id).dispatchEvent(new Event('change'));await delay()};
+const on=async()=>{get('qhjt-game').checked=true;get('qhjt-game').dispatchEvent(new Event('change'));await delay()};
+const add=async(id,name,extra='')=>{await click(id);get('qhjt-name').value=name;get('qhjt-name-extra').value=extra;await click('qhjt-name-ok')};
+try {
+ if(sessionStorage.reloadState){
+  metadataA.qingheji_tavern=JSON.parse(sessionStorage.reloadState);
+  get('extensions_settings2').remove();get('sheld').remove();
+  await import('/index.js');await delay();
+  check(get('qhjt-host')?.parentElement===document.body&&!get('qhjt-host').hidden,'Refresh launcher without anchors/init');
+  check(Object.keys(game().inventory).length>=4,'Refresh inventory');check(Object.keys(game().npcs).length===1,'Refresh NPC');
+  check(document.querySelectorAll('#qhjt-entry').length===1,'Unique refresh entry');window.__result={passed:true,reloaded:true};
+ } else {
+ const detachedSettings=get('extensions_settings2'),detachedChat=get('sheld');detachedSettings.remove();detachedChat.remove();
+ await import('/index.js');check(get('qhjt-host')?.parentElement===document.body,'No anchor dependency');
+ document.body.append(detachedSettings,detachedChat);await delay();await events.init();await events.init();
+ check(innerWidth===320,'Actual 320px viewport');check(get('qhjt-host').hidden,'Game off');
+ await on();get('extensions_settings2').hidden=true;
+ for(const id of ['qhjt-add-character','qhjt-add-user','qhjt-control','qhjt-plus','qhjt-tab-actions','qhjt-actors'])check(!get(id),'Removed developer UI '+id);
+ check(get('qhjt-npc-list').textContent==='当前还没有认识的人。','World card not an NPC');
+ const entry=get('qhjt-entry').getBoundingClientRect(),input=get('form_sheld').getBoundingClientRect();check(input.top-entry.bottom>=79&&entry.width>=44,'Launcher clearance');
+ await click('qhjt-tab-inventory');await add('qhjt-add-inventory','野菜','');
+ check(get('qhjt-inventory-list').textContent.includes('数量未知'),'Unknown quantity visible');
+ await click('qhjt-tab-settings');await add('qhjt-add-action','摆摊');
+ await click('qhjt-tab-state');const actionButton=get('qhjt-action-list').querySelector('button');
+ check(actionButton.getBoundingClientRect().width>=120&&actionButton.getBoundingClientRect().height<=48,'Horizontal action button');
+ await click('qhjt-tab-locations');await add('qhjt-add-location','后山','已知简介');
+ const locationId=Object.keys(game().locations)[0];await click('qhjt-location-'+locationId);
+ await add('qhjt-add-resources','柴火');await click('qhjt-associate-action');await click('qhjt-set-location');
+ check(game().actors.actor_1.locationId===locationId,'Position stored');
+ await events.start('normal');messages.push({is_user:true,mes:'清点物资：糙米 ×5，柴火 ×8，清水 ×4',send_date:'round1-user'},{is_user:false,mes:'这些是现有家当。',send_date:'round1-assistant'});
+ await events.end();await events.received(messages.length-1);await delay();
+ check(Object.values(game().inventory).find(item=>item.label==='柴火').quantity===8,'Streaming local inventory');
+ await click('qhjt-tab-settings');await click('qhjt-sync-chat');check(Object.values(game().inventory).find(item=>item.label==='柴火').quantity===8,'Repeated sync does not add');
+ await click('qhjt-reanalyze');check(game().pendingDiscoveries.length>0,'Reanalysis preview only');
+ check(Object.values(game().inventory).find(item=>item.label==='柴火').quantity===8,'Reanalysis cannot double quantity');
+ // Test the configured transport with a fake fetch; no external API or real key.
+ window.fetch=async(url,options)=>{
+  requests++;check(url==='https://example.test/v1/chat/completions','Endpoint assembly');check(options.headers.Authorization==='Bearer browser-test-key','Configured key');
+  const body=JSON.parse(options.body);let output={ok:true};
+  if(body.messages.length===2){
+   const context=JSON.parse(body.messages[1].content),message=context.messages.find(item=>item.text.includes('白发红眼'));
+   const ref={messageId:message.id,evidence:message.text,confidence:0.99};
+   output={npcs:[{name:'砚绒',status:'known',...ref,appearance:[{text:'白发',...ref},{text:'红眼',...ref}],personality:[]}]};
+  }
+  return {ok:true,text:async()=>JSON.stringify({choices:[{message:{content:JSON.stringify(output)},finish_reason:'stop'}]})};
+ };
+ get('qhjt-secondary').open=true;await click('qhjt-add-channel');
+ for(const [key,value] of Object.entries({name:'测试渠道',baseUrl:'https://example.test/v1/',apiKey:'browser-test-key',model:'test'}))get('qhjt-api-'+key).value=value;
+ get('qhjt-api-enabled').checked=true;await click('qhjt-save-channel');
+ check(get('qhjt-api-apiKey').type==='password','Masked key input');await click('qhjt-test-api');check(requests===1,'Explicit connection test');
+ await events.start('normal');messages.push({is_user:true,mes:'一个叫砚绒的白发红眼兽人走过来和你说话。',send_date:'round2-user'},{is_user:false,mes:'你们打了招呼。',send_date:'round2-assistant'});
+ await events.received(messages.length-1);await events.end();await delay();
+ check(requests===2,'One semantic API call per round');await events.end();check(requests===2,'Duplicate end no call');
+ await click('qhjt-tab-npcs');const npc=Object.values(game().npcs)[0];check(npc.name==='砚绒','Semantic NPC');
+ const npcButton=get('qhjt-npc-list').querySelector('button');check(npcButton.getBoundingClientRect().width>=250,'One full NPC per row');
+ await click('qhjt-npc-'+npc.id);check(get('qhjt-npc-detail').textContent.includes('???'),'Locked knowledge placeholder');
+ check(!get('qhjt-npc-list').textContent.includes('玩家')&&!get('qhjt-npc-list').textContent.includes('田园生活'),'No User or card title');
+ check(requests===2,'Ordinary buttons zero AI');
+ check(document.documentElement.scrollWidth<=320&&get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'No mobile overflow');
+ await click('qhjt-close');check(!get('qhjt-overlay').open,'Close');check(get('chat').style.overflow==='','Unlock chat');
+ await click('qhjt-entry');get('qhjt-overlay').dispatchEvent(new MouseEvent('click',{bubbles:true}));await delay();check(!get('qhjt-overlay').open,'Backdrop closes');
+ await click('qhjt-entry');const system=document.createElement('dialog');system.textContent='System';document.body.append(system);system.showModal();check(document.elementFromPoint(160,370)===system||system.contains(document.elementFromPoint(160,370)),'System modal above');system.close();system.remove();
+ metadata=metadataB;chatId='B';await events.chat();check(get('qhjt-host').hidden,'Chat B disabled');await on();
+ check(Object.keys(game().inventory).length===0&&Object.keys(game().npcs).length===0,'Chat B isolated');
+ metadata=metadataA;chatId='A';await events.chat();check(!get('qhjt-host').hidden,'Chat A restored');
+ get('qhjt-host').remove();get('qhjt-overlay').remove();await delay();check(get('qhjt-entry'),'DOM recovery');
+ const stable=get('qhjt-entry');get('chat').append(document.createElement('p'));await delay();check(get('qhjt-entry')===stable,'No duplicate DOM rebuild');
+ for(const id of ['qhjt-entry','qhjt-overlay','qhjt-panel'])check(document.querySelectorAll('#'+id).length===1,'Unique '+id);
+ get('qhjt-master').checked=false;get('qhjt-master').dispatchEvent(new Event('change'));await delay();check(!get('qhjt-entry'),'Master unmount');
+ get('qhjt-master').checked=true;get('qhjt-master').dispatchEvent(new Event('change'));await delay();await click('qhjt-entry');
+ await click('qhjt-tab-inventory');await click('qhjt-add-inventory');
+ sessionStorage.reloadState=JSON.stringify(game());window.__result={passed:true,width:innerWidth};
+ }
+} catch(error){window.__result={passed:false,error:error.stack}}
+</script></body></html>
