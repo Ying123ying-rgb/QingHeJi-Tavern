@@ -2,6 +2,7 @@ import { worldTemplates } from './data/world-templates.js';
 import { readState, needsMigration, isObject, getTemplate, addActor, inspectActor, setControlMode, resolveControlledActor, deleteActor, changeCurrency, resetWorld } from './core/game-state.js';
 import { currentCharacter, currentUser } from './core/actor-sources.js';
 import { mountFloatingPanel } from './ui/floating-panel.js';
+import { addAction, removeAction, listActions, findAction } from './core/actions.js';
 
 (() => {
     'use strict';
@@ -58,9 +59,15 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
     }
 
     function mount() {
-        if (ui.mounted) return;
-        const view = mountFloatingPanel(ui.chat, ui.status, {
+        if (ui.mounted && ui.host.isConnected && ui.entry.isConnected && ui.panel.isConnected && ui.overlay.isConnected) return;
+        unmount();
+        const view = mountFloatingPanel(ui.status, {
             open: openPanel, close: closePanel, world: changeWorld, add: addPerson,
+            addAction: async () => {
+                const expected = context();
+                const name = await ui.requestName('行动名称', '', 'actions');
+                if (name !== null) await editAction('add', name, expected);
+            },
             currency: delta => editActor(game => changeCurrency(game, delta, context())),
             control: () => editActor(game => setControlMode(game, game.controlMode === 'user' ? 'character' : 'user', context())),
         });
@@ -80,7 +87,7 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         ui.viewKeys = []; ui.mounted = false;
     }
 
-    function refresh() {
+    function update() {
         if (!ui) return;
         const ctx = context();
         const info = identity(ctx);
@@ -96,12 +103,15 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         ui.world.disabled = ui.game.disabled;
         ui.world.value = getTemplate(game.world.templateId) ? game.world.templateId : '';
         renderActors(ctx, game);
+        renderActions(ctx, game);
         ui.info.textContent = `角色：${info.name}；characterId：${ctx.characterId ?? '无'}；聊天标识：${info.chatId ?? '无'}`;
         ui.host.hidden = !pluginEnabled(ctx) || !info.valid || !game.enabled;
         ui.positionFloating();
         if (ui.host.hidden) closePanel();
         else if (!ui.panel.hidden) renderPanel(ctx, game);
     }
+
+    const refresh = update;
 
     function canEdit(ctx) {
         const info = identity(ctx);
@@ -112,7 +122,7 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
     async function persist(ctx, next, migrating = false) {
         // Never commit a result prepared for a chat that has since changed.
         const current = context();
-        if (busy || current.chatMetadata !== ctx.chatMetadata || identity(current).key !== identity(ctx).key) return;
+        if (busy || current.chatMetadata !== ctx.chatMetadata || identity(current).key !== identity(ctx).key) return false;
         const metadata = ctx.chatMetadata;
         const hadState = Object.hasOwn(metadata, KEY);
         const previous = metadata[KEY];
@@ -121,9 +131,11 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         ui.status.textContent = migrating ? '正在迁移旧版游戏存档…' : '正在请求保存…';
         if (migrating) closePanel();
         refresh();
+        let saved = false;
         try {
             // Invoke immediately, without a debounce that could target another chat.
             await ctx.saveMetadata();
+            saved = true;
             if (context().chatMetadata === metadata) {
                 ui.status.textContent = migrating
                     ? '旧版存档已转换，保存请求已完成；请刷新检查。'
@@ -142,6 +154,76 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
             // A chat selected during a pending save may also need migration.
             await migrateCurrent();
         }
+        return saved;
+    }
+
+    function notice(message) {
+        if (ui) ui.status.textContent = message;
+        globalThis.toastr?.info(message, '酒馆人生模拟器', { escapeHtml: true });
+        return message;
+    }
+
+    async function editAction(operation, name, expected = context()) {
+        const ctx = context();
+        if (!canEdit(ctx) || !state(ctx).enabled || ctx.chatMetadata !== expected.chatMetadata
+            || identity(ctx).key !== identity(expected).key) return notice('请在当前聊天开启游戏模式，等待保存完成后重试。');
+        const next = state(ctx);
+        if (operation === 'remove') {
+            const action = findAction(next, name);
+            if (!action) return notice('当前聊天没有该行动。');
+            if (!globalThis.confirm(`确定从当前聊天移除行动‘${action.label}’吗？`)) return notice('已取消删除。');
+            if (!canEdit(context()) || context().chatMetadata !== ctx.chatMetadata || identity(context()).key !== identity(ctx).key) return notice('聊天已切换，操作已取消。');
+        }
+        try {
+            const action = operation === 'add' ? addAction(next, name) : removeAction(next, name);
+            const saved = await persist(ctx, next);
+            if (context().chatMetadata !== ctx.chatMetadata || identity(context()).key !== identity(ctx).key) return '';
+            return notice(saved ? `已${operation === 'add' ? '添加' : '移除'}行动“${action.label}”。` : '行动保存失败，请重试。');
+        } catch (error) { return notice(error.message); }
+    }
+
+    function renderActions(ctx, game) {
+        ui.actionList.replaceChildren();
+        const actions = listActions(game);
+        if (!actions.length) ui.actionList.append(element('p', '当前聊天尚未解锁自定义行动。'));
+        for (const action of actions) {
+            const row = element('div', undefined, 'qhjt-actions');
+            const launch = button(action.label, () => notice('该行动尚未配置执行逻辑。'));
+            launch.disabled = action.enabled === false || ui.game.disabled;
+            const remove = button('删除', () => editAction('remove', action.label, ctx));
+            remove.disabled = ui.game.disabled;
+            row.append(launch, remove); ui.actionList.append(row);
+        }
+        ui.addAction.disabled = ui.game.disabled;
+    }
+
+    function registerCommands(ctx) {
+        const callback = async (_args, value) => {
+            const match = /^action\s+(add|remove|list)(?:\s+([\s\S]*))?$/u.exec(String(value ?? '').trim());
+            if (!match || (match[1] === 'list' && match[2])) {
+                notice('用法：/life action add 名称 | remove 名称 | list'); return '';
+            }
+            if (!ui) initialize();
+            if (!ui) { notice('插件尚未就绪。'); return ''; }
+            update();
+            if (!canEdit(context()) || !state(context()).enabled) {
+                notice('请在当前聊天开启游戏模式，等待保存完成后重试。'); return '';
+            }
+            if (match[1] === 'list') notice(listActions(state(context())).map(action => action.label).join('、') || '当前聊天尚未解锁自定义行动。');
+            else await editAction(match[1], match[2]);
+            // Never pass action text onward through the STscript pipe.
+            return '';
+        };
+        if (ctx.SlashCommandParser?.addCommandObject && ctx.SlashCommand?.fromProps) {
+            ctx.SlashCommandParser.addCommandObject(ctx.SlashCommand.fromProps({
+                name: 'life', callback, helpString: '本地行动：/life action add 名称；/life action remove 名称；/life action list',
+                unnamedArgumentList: ctx.SlashCommandArgument?.fromProps ? [ctx.SlashCommandArgument.fromProps({
+                    description: 'action add/remove 名称，或 action list', typeList: [ctx.ARGUMENT_TYPE.STRING], isRequired: true,
+                })] : [],
+            }));
+        } else if (ctx.registerSlashCommand) {
+            ctx.registerSlashCommand('life', callback, [], '本地行动：action add/remove 名称，或 action list', true, true);
+        } else notice('宿主缺少 Slash Command API，请使用行动页管理行动。');
     }
 
     async function changeGame() {
@@ -311,13 +393,9 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
     }
 
     function initialize() {
-        if (ui || document.getElementById('qhjt-settings')) return;
+        if (ui) { update(); return; }
+        if (!document.body) return;
         const settingsRoot = document.getElementById('extensions_settings2') ?? document.getElementById('extensions_settings');
-        const chat = document.getElementById('chat');
-        if (!settingsRoot || !chat?.parentElement) {
-            console.error('[酒馆人生模拟器] 缺少扩展设置区或聊天区，未挂载 UI。');
-            return;
-        }
         const settings = element('section', undefined, 'qhjt-settings');
         settings.id = 'qhjt-settings';
         const master = toggle('插件总开关', 'qhjt-master');
@@ -326,8 +404,8 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         status.setAttribute('role', 'status');
         settings.append(element('h3', '酒馆人生模拟器'), master.label, game.label,
             element('p', '开启后，请在聊天页面点击『人生』悬浮按钮进入模拟器。', 'qhjt-info'));
-        settingsRoot.append(settings);
-        ui = { master: master.input, game: game.input, status, chat, mounted: false };
+        settingsRoot?.append(settings);
+        ui = { master: master.input, game: game.input, status, settings, mounted: false };
         master.input.addEventListener('change', () => {
             const ctx = context();
             const existing = ctx.extensionSettings[KEY];
@@ -353,13 +431,30 @@ import { mountFloatingPanel } from './ui/floating-panel.js';
         console.error('[酒馆人生模拟器] 缺少必要的 Context API，请使用 SillyTavern 1.18.0。');
         return;
     }
-    ctx.eventSource.on(events.CHAT_CHANGED, () => {
+    const chatChanged = () => {
         if (ui) {
             closePanel();
             ui.status.textContent = '已切换聊天，游戏状态来自当前聊天。';
             refresh();
             return migrateCurrent();
         }
-    });
+    };
+    for (const name of new Set([events.CHAT_CHANGED, events.CHARACTER_SELECTED, events.CHARACTER_EDITED].filter(Boolean))) ctx.eventSource.on(name, chatChanged);
     ctx.eventSource.on(events.APP_INITIALIZED, initialize);
+    registerCommands(ctx);
+    initialize(); // Also works when APP_INITIALIZED fired before extension loading.
+    if (typeof MutationObserver === 'function') {
+        const observer = new MutationObserver(() => {
+            if (!ui) { initialize(); return; }
+            const root = document.getElementById('extensions_settings2') ?? document.getElementById('extensions_settings');
+            if (root && ui.settings.parentElement !== root) root.append(ui.settings);
+            const current = context();
+            const changed = current.chatMetadata !== renderedMetadata || identity(current).key !== renderedIdentity;
+            const shouldShow = pluginEnabled(current) && identity(current).valid && current.chatMetadata?.[KEY]?.enabled === true;
+            const damaged = ui.mounted && (!ui.host.isConnected || !ui.entry.isConnected || !ui.overlay.isConnected || !ui.panel.isConnected);
+            if (changed) { chatChanged(); return; }
+            if (damaged || ui.mounted !== pluginEnabled(current) || (ui.mounted && ui.host.hidden === shouldShow)) update();
+        });
+        observer.observe(document.documentElement, { childList: true, subtree: true });
+    }
 })();

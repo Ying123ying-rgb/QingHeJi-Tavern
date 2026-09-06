@@ -19,7 +19,22 @@ const click=async id=>{get(id).click();await delay()};
 const change=async(id,value)=>{get(id).value=value;get(id).dispatchEvent(new Event('change'));await delay()};
 const on=async()=>{get('qhjt-game').checked=true;get('qhjt-game').dispatchEvent(new Event('change'));await delay()};
 try {
- await import('/index.js'); await events.init(); await events.init();
+ if(sessionStorage.reloadState){
+  metadataA.qingheji_tavern=JSON.parse(sessionStorage.reloadState);
+  get('extensions_settings2').remove();get('sheld').remove();
+  await import('/index.js');await delay();
+  check(get('qhjt-host')?.parentElement===document.body&&!get('qhjt-host').hidden,'Saved enabled chat visible on refresh without anchors or init event');
+  check(Object.keys(metadataA.qingheji_tavern.actions).length===1,'Refresh keeps actions');
+  check(document.querySelectorAll('#qhjt-entry').length===1,'Refresh has one launcher');
+  window.__result={passed:true,reloaded:true};
+ } else {
+ const detachedSettings=get('extensions_settings2'), detachedChat=get('sheld');
+ detachedSettings.remove();detachedChat.remove();
+ await import('/index.js');
+ check(get('qhjt-host')?.parentElement===document.body,'Initial mount requires neither settings nor chat');
+ document.body.append(detachedSettings,detachedChat);await delay();
+ check(get('qhjt-settings')?.parentElement===detachedSettings,'Late settings attachment');
+ await events.init(); await events.init();
  check(innerWidth===320,'Must test an actual 320px viewport');
  check(get('qhjt-host').hidden,'OFF hides entry');
  check(get('qhjt-settings').querySelectorAll('select,button').length===0,'Settings must contain no management controls');
@@ -33,6 +48,11 @@ try {
  get('sheld').style.transform='';window.dispatchEvent(new Event('resize'));await delay();
  await click('qhjt-entry');
  check(get('qhjt-overlay').open,'Open modal');
+ await click('qhjt-tab-actions');
+ check(get('qhjt-action-list').textContent==='当前聊天尚未解锁自定义行动。','Empty action state');
+ await click('qhjt-add-action');get('qhjt-name').value='长行动名称'.repeat(25);await click('qhjt-name-ok');
+ check(Object.keys(metadata.qingheji_tavern.actions).length===1,'Action form saves immediately');
+ check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'Long action fits 320px');
  check(document.documentElement.scrollWidth<=320,'No page horizontal overflow');
  check(get('qhjt-panel').getBoundingClientRect().width<=320,'Sheet fits viewport');
  check(get('qhjt-scroll').scrollWidth<=get('qhjt-scroll').clientWidth,'No sheet horizontal overflow');
@@ -67,6 +87,12 @@ try {
  await click('qhjt-name-cancel');
  metadata=metadataB;chatId='B';await events.chat();check(get('qhjt-host').hidden&&!get('qhjt-overlay').open,'B OFF clears A UI');
  metadata=metadataA;chatId='A';await events.chat();check(!get('qhjt-host').hidden,'A ON restored');
+ const oldEntry=get('qhjt-entry');get('qhjt-host').remove();get('qhjt-overlay').remove();await delay();
+ check(get('qhjt-entry')!==oldEntry&&!get('qhjt-host').hidden,'Observer repairs removed body UI');
+ get('sheld').replaceWith(get('sheld').cloneNode(true));await delay();
+ check(!get('qhjt-host').hidden,'Chat DOM rebuild preserves entry');
+ const stableEntry=get('qhjt-entry');get('chat').append(document.createElement('p'));await delay();
+ check(get('qhjt-entry')===stableEntry,'Ordinary DOM mutation does not recreate launcher');
  for(let i=0;i<3;i++)await events.chat();
  for(const id of ['qhjt-entry','qhjt-overlay','qhjt-panel'])check(document.querySelectorAll('#'+id).length===1,'No duplicate '+id);
  await click('qhjt-entry');
@@ -75,13 +101,15 @@ try {
  check(get('chat').style.overflow==='','Unmount unlocks background');
  get('qhjt-master').checked=true;get('qhjt-master').dispatchEvent(new Event('change'));await delay();
  await click('qhjt-entry');await click('qhjt-tab-actors');await click('qhjt-add-custom');
+ sessionStorage.reloadState=JSON.stringify(metadataA.qingheji_tavern);
  window.__result={passed:true,width:innerWidth,sheetWidth:get('qhjt-panel').getBoundingClientRect().width};
+ }
 } catch(error){window.__result={passed:false,error:error.stack}}
 </script></body></html>`;
 async function main() {
     const executable = process.env.QHJT_CHROME || ['C:/Program Files/Google/Chrome/Application/chrome.exe','C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(file=>fs.existsSync(file));
     if(!executable)throw Error('Set QHJT_CHROME to a local Chrome/Chromium executable.');
-    const allowed = new Set(['index.js','style.css','ui/floating-panel.js','core/game-state.js','core/actor-sources.js','data/world-templates.js']);
+    const allowed = new Set(['index.js','style.css','ui/floating-panel.js','core/game-state.js','core/actions.js','core/actor-sources.js','data/world-templates.js']);
     const server=http.createServer((req,res)=>{
         const name=(req.url||'/').slice(1);
         if(!name){res.setHeader('Content-Type','text/html; charset=utf-8');res.end(fixture);return}
@@ -130,6 +158,10 @@ async function main() {
         await new Promise(resolve=>setTimeout(resolve,100));
         const desktop=await call('Runtime.evaluate',{expression:'(()=>{const box=document.getElementById("qhjt-panel").getBoundingClientRect();return box.width<=640&&Math.abs((box.left+box.right)/2-512)<2&&document.documentElement.scrollWidth<=1024})()',returnByValue:true});
         if(!desktop.result.value)throw Error('Desktop centered layout failed');
+        await call('Page.reload');
+        await new Promise(resolve=>setTimeout(resolve,200));
+        const reloaded=await call('Runtime.evaluate',{expression:'new Promise((resolve,reject)=>{const timer=setInterval(()=>{if(window.__result){clearInterval(timer);resolve(window.__result)}},30);setTimeout(()=>{clearInterval(timer);reject(Error("Reload timeout"))},5000)})',awaitPromise:true,returnByValue:true});
+        if(!reloaded.result?.value?.passed||!reloaded.result.value.reloaded)throw Error('Refresh failed: '+JSON.stringify(reloaded));
         console.log('PASS: real headless Chromium at 320x740 and 320x400, no horizontal overflow, visible name input/close, entry clearance, modal close/backdrop, system modal stacking, actor/world edits, A/B isolation, unmount/remount. Mock host only.');
         await send('Browser.close');
     } finally {

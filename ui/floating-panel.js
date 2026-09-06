@@ -1,5 +1,5 @@
 // UI only: no game data or persistence. The caller owns update/render operations.
-export function mountFloatingPanel(chat, status, handlers) {
+export function mountFloatingPanel(status, handlers) {
     const controller = new AbortController();
     const signal = controller.signal;
     const node = (tag, text, className) => {
@@ -21,8 +21,7 @@ export function mountFloatingPanel(chat, status, handlers) {
     entry.setAttribute('aria-expanded', 'false');
     entry.setAttribute('aria-haspopup', 'dialog');
     host.append(entry);
-    // Preserve the proven chat mount anchor; the modal uses the body's top layer.
-    chat.after(host);
+    document.body.append(host);
     const overlay = node('dialog'); overlay.id = 'qhjt-overlay';
     overlay.setAttribute('aria-labelledby', 'qhjt-title');
     const panel = node('section', undefined, 'qhjt-panel'); panel.id = 'qhjt-panel'; panel.hidden = true;
@@ -46,7 +45,7 @@ export function mountFloatingPanel(chat, status, handlers) {
         }
         scroll.scrollTop = 0;
     }
-    for (const [id, label] of [['state', '状态'], ['actors', '人物'], ['world', '世界'], ['settings', '设置']]) {
+    for (const [id, label] of [['state', '状态'], ['actions', '行动'], ['actors', '人物'], ['world', '世界'], ['settings', '设置']]) {
         const page = node('section'); page.id = `qhjt-page-${id}`;
         page.setAttribute('role', 'tabpanel'); page.setAttribute('aria-labelledby', `qhjt-tab-${id}`);
         const tab = button(label, `qhjt-tab-${id}`, () => selectTab(id));
@@ -94,8 +93,8 @@ export function mountFloatingPanel(chat, status, handlers) {
         nameForm.hidden = true;
         const resolve = resolveName; resolveName = undefined; resolve?.(value);
     }
-    function requestName(label, initial = '') {
-        finishName(null); selectTab('actors');
+    function requestName(label, initial = '', page = 'actors') {
+        finishName(null); pages[page].append(nameForm); selectTab(page);
         nameLabel.textContent = label; nameInput.value = initial; nameForm.hidden = false;
         nameInput.focus(); nameForm.scrollIntoView({ block: 'nearest' });
         return new Promise(resolve => { resolveName = resolve; });
@@ -105,6 +104,9 @@ export function mountFloatingPanel(chat, status, handlers) {
         if (!nameInput.value.trim()) { nameInput.focus(); return; }
         finishName(nameInput.value.trim());
     });
+    const actionList = node('div'); actionList.id = 'qhjt-action-list';
+    const addAction = button('＋添加行动', 'qhjt-add-action', handlers.addAction);
+    pages.actions.append(actionList, addAction);
     const world = select('qhjt-world', '当前聊天世界模板', pages.world);
     listen(world, 'change', handlers.world);
     pages.settings.append(node('p', '游戏模式：已开启'), node('p', 'AI设置、显示设置、存档管理：未来开放。'));
@@ -123,7 +125,7 @@ export function mountFloatingPanel(chat, status, handlers) {
         panel.hidden = false;
         overlay.showModal();
         // The native modal traps focus/inerts the background. Lock its scroll too.
-        const targets = [document.documentElement, document.body, chat];
+        const targets = [document.documentElement, document.body, document.getElementById('chat')].filter(Boolean);
         const previous = targets.map(target => [target, target.style.overflow, target.style.overscrollBehavior]);
         for (const target of targets) { target.style.overflow = 'hidden'; target.style.overscrollBehavior = 'none'; }
         unlock = () => { for (const [target, overflow, overscroll] of previous) {
@@ -143,32 +145,22 @@ export function mountFloatingPanel(chat, status, handlers) {
         const left = viewport?.offsetLeft ?? 0, width = viewport?.width ?? globalThis.innerWidth;
         overlay.style.top = `${top}px`; overlay.style.left = `${left}px`;
         overlay.style.width = `${width}px`; overlay.style.height = `${height}px`;
-        const chatRect = chat.getBoundingClientRect();
-        const inputTop = document.getElementById('form_sheld')?.getBoundingClientRect().top ?? chatRect.bottom;
-        const navBottom = document.getElementById('top-settings-holder')?.getBoundingClientRect().bottom ?? top + 48;
-        const entryTop = Math.min(top + height * 0.62, inputTop - 80 - 48);
-        const targetTop = Math.max(navBottom + 8, entryTop);
-        const targetLeft = Math.max(left + 8, Math.min(chatRect.right, left + width) - 60);
-        entry.style.top = `${targetTop}px`; entry.style.left = `${targetLeft}px`;
-        // A translated chat container can become the fixed-position containing
-        // block. Correct its offset while keeping the existing chat mount anchor.
-        if (!host.hidden) {
-            const actual = entry.getBoundingClientRect();
-            entry.style.top = `${targetTop + targetTop - actual.top}px`;
-            entry.style.left = `${targetLeft + targetLeft - actual.left}px`;
-        }
-        entry.style.visibility = entryTop < navBottom + 8 ? 'hidden' : '';
+        const inputTop = document.getElementById('form_sheld')?.getBoundingClientRect().top;
+        const bottom = Number.isFinite(inputTop) && inputTop > top && inputTop <= top + height
+            ? inputTop : top + height;
+        entry.style.top = `${Math.max(top + 8, bottom - 100 - 48)}px`;
+        entry.style.left = `${Math.max(left + 8, left + width - 60)}px`;
         if (!nameForm.hidden) nameForm.scrollIntoView({ block: 'nearest' });
     }
     listen(globalThis, 'resize', position);
     listen(globalThis.visualViewport, 'resize', position);
     listen(globalThis.visualViewport, 'scroll', position);
     const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(position) : null;
-    observer?.observe(chat);
+    const chat = document.getElementById('chat'); if (chat) observer?.observe(chat);
     const input = document.getElementById('form_sheld'); if (input) observer?.observe(input);
     selectTab('state'); position();
     return { host, entry, overlay, panel, close, values, worldValues, actorValues, plus, minus, world,
-        actorList, addCharacter, addUser, addCustom, control,
+        actionList, addAction, actorList, addCharacter, addUser, addCustom, control,
         detail, detailValues, info, controller, requestName,
         openFloating: open, closeFloating: hide, positionFloating: position,
         destroyFloating() { hide(); controller.abort(); observer?.disconnect(); host.remove(); overlay.remove(); },

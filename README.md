@@ -1,12 +1,12 @@
 # 酒馆人生模拟器 · QingHeJi-Tavern
 
-通用 SillyTavern 生活模拟游戏引擎，当前版本 **0.1.3（悬浮 UI 与角色/User 操作模式）**，采用三段版本号，不是副 API 版本。青禾记 / 古代田园只是第一个世界模板。仓库与目录仍为 `QingHeJi-Tavern`。
+通用 SillyTavern 生活模拟游戏引擎，当前版本 **0.1.4（悬浮入口修复与每聊天 Action Registry）**。青禾记 / 古代田园只是第一个世界模板。仓库与目录仍为 `QingHeJi-Tavern`。
 
-**人物、世界和状态管理已从扩展设置页移动至聊天内悬浮游戏面板。** 世界与人物仍独立保存，本轮将控制权与查看对象拆分，并兼容此前存档。
+**状态、行动、人物和世界管理位于聊天悬浮游戏面板。** 本轮修复 Android 入口挂载与初始化，并加入每聊天独立的临时行动；延续原有控制模式及存档兼容。
 
 本版结构：**一个聊天世界 + 默认跟随当前角色卡 / 一键切换 User + 可查看的 NPC**。每个聊天独立保存，SillyTavern 当前聊天角色与模拟游戏当前操作角色相互解耦。点击人物仅查看详情，不转移控制权，也不切换聊天。
 
-不调用 AI、不开发副 API，不发送消息，不修改聊天文本、角色卡、世界书或 SillyTavern 核心代码。背包、商店、种田、摆摊、NPC 行动等均未实现。
+不调用 AI、不开发副 API，不发送消息，不修改聊天文本、角色卡、世界书或 SillyTavern 核心代码。行动只注册名称，不执行结算；背包、商店、种田、摆摊、NPC 自主行为等均未实现。
 
 ## 安装与使用
 
@@ -24,14 +24,33 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
 
 ## 悬浮面板与生命周期
 
-- 四页签：状态、人物、世界、设置。设置页只显示游戏模式及 AI设置/显示设置/存档管理的未来占位，没有这些功能。技术信息在最下面默认收起的「调试信息」中。
+- 五页签：状态、行动、人物、世界、设置。设置页只显示游戏模式及 AI设置/显示设置/存档管理的未来占位，没有这些功能。技术信息在最下面默认收起的「调试信息」中。
 - 手机是底部抽屉，最大高度约可视区域的 88%，桌面宽屏居中。关闭按钮、遮罩点击或 Escape 均可关闭；没有打开浏览器窗口。
-- 入口保留 `chat.after(host)` 挂载锚点，固定在聊天右侧。根据聊天及输入区尺寸定位，距输入区至少约 80px；空间不足时暂时隐藏入口，避免挡住导航或输入。
+- 入口宿主和遮罩面板直接挂到 `document.body`，不依赖设置区或聊天内部容器。入口使用 fixed 和 z-index 100，位于手机右侧、输入区上方约 100px；输入区不存在时使用可视窗口底边定位，狭小视口内钳制位置而不隐藏。
 - 页面内原生 `dialog.showModal()` 管理遮罩、焦点和背景不可交互；后打开的宿主原生弹窗仍在上层。参照 [SillyTavern 1.18.0 自身弹窗实现](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/popup.js)，未导入内部弹窗代码。
 - 面板内部独立纵向滚动，打开时保存并锁定背景滚动样式，关闭时恢复。查看人物、改变世界后即时刷新，不关闭面板。
 - 自定义人物及玩家改名使用「人物」页内名称输入表单。`visualViewport` 跟随软键盘变化，滚动输入框到可见区域。关闭/换聊天/卸载会取消尚未提交的输入。
 - `mount/update/unmount` 避免重复节点。游戏模式 OFF 隐藏入口并关闭面板；总开关 OFF 移除入口和浮层，取消浮层/人物按钮监听并断开 ResizeObserver、视口监听。只保留恢复开关和跟随聊天所必需的宿主设置/事件监听。
+- 模块加载立即初始化，同时保留 APP_INITIALIZED 与聊天/角色事件。MutationObserver 检查节点丢失、聊天身份及开关状态；只在需要恢复时更新，普通聊天 DOM 变化不重复创建。设置区晚到或重建时重新附加已有设置节点。
 - 320px 布局、100% 宽 select、按钮换行、至少 44px 触摸尺寸、长名字省略。正常关闭即可恢复聊天输入，无需 hover。
+
+## 当前聊天行动
+
+「行动」页为空时显示“当前聊天尚未解锁自定义行动。”，点击「＋添加行动」输入名称即可立即刷新。名称去除首尾空白、合并连续空白并标准化，同名（含英文字母大小写）不能重复。ID 根据标准化名称编码生成，保存后保持稳定。每项有删除按钮，确认后只从当前聊天移除；点击行动只提示“该行动尚未配置执行逻辑。”
+
+也可在聊天输入框执行以下本地指令，需开启插件及当前聊天游戏模式：
+
+```text
+/life action add 摆摊
+/life action remove 摆摊
+/life action list
+```
+
+通过公开 Context 的 SlashCommandParser.addCommandObject / SlashCommand.fromProps 注册，旧宿主回退 registerSlashCommand。依据：[官方扩展指令文档](https://docs.sillytavern.app/for-contributors/writing-extensions/)及 [1.18.0 Context 导出](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js)。指令返回空管道值，用简短本地提示反馈；删除同样需要确认。不发送消息或请求 AI。缺少指令 API 时提示改用行动页，不监听自然语言。
+
+每聊天存档新增 `actions: {}`，全局设置没有 actions。temporary 表示用户临时定义的行动，仍随该聊天保存并在刷新后保留；新聊天为空。示例名称只属于用户输入，核心只处理通用 Action。
+
+每项初始字段为 id、label、enabled: true、temporary: true、source: 'user'、metadata: {}。未来 duration、costs、requirements、effects、location、cooldown、aiRoute、handler 等字段原样保留，本版不解释或执行。旧存档自动补空 actions，已有 world、actors、controlMode、currency、stats、calendar 沿用原兼容逻辑；切换世界保留当前聊天行动。
 
 ## 人物来源与身份
 
@@ -69,6 +88,7 @@ Android Termux 中正常启动已有 SillyTavern。在扩展管理中用仓库 U
   "controlMode": "character",
   "inspectedActorId": "actor_1",
   "nextActorNumber": 2,
+  "actions": {},
   "actors": {
     "actor_1": {
       "id": "actor_1",
@@ -117,10 +137,11 @@ UI 遍历统一的 currency、calendar、stats，不根据古代/现代/星际�
 
 ## 文件与加载兼容
 
-- `manifest.json`：0.1.3，最低 SillyTavern 1.18.0，加载顺序仍为 100。
+- `manifest.json`：0.1.4，最低 SillyTavern 1.18.0，加载顺序仍为 100。
 - `index.js`：现有 Context、人物管理和保存回调，精简设置及浮层挂载/更新/卸载。
-- `ui/floating-panel.js`：浮层 DOM、四页签、名称输入、滚动锁定、视口定位及清理；不处理存档。
+- `ui/floating-panel.js`：浮层 DOM、五页签、名称输入、滚动锁定、视口定位及清理；不处理存档。
 - `core/game-state.js`：世界/actor 初始化、角色/User 解析、只读查看指针、统一行动入口与旧存档迁移；不访问 DOM 或 SillyTavern。
+- `core/actions.js`：通用行动注册、查询及删除；不执行行动、不访问宿主。
 - `core/actor-sources.js`：从公开 Context 提取最少身份信息。
 - `data/world-templates.js`：三个统一结构的只读模板，保持原定义。
 - `style.css`：手机 select、44px 按钮、长名字省略及可换行布局。
@@ -128,7 +149,7 @@ UI 遍历统一的 currency、calendar、stats，不根据古代/现代/星际�
 - `scripts/browser-check.cjs`：无依赖的可选无头 Chromium 浏览器布局检查，使用本机模拟宿主页面。
 - `data/.gitkeep`、`LICENSE`：保留原文件。
 
-保留 `APP_INITIALIZED`、`CHAT_CHANGED`、`#extensions_settings2`（回退 `#extensions_settings`）、`chat.after(host)`，以及 `eventTypes/event_types`、`chatId/getCurrentChatId()` 兼容方式。所有项目模块使用相对路径，未导入宿主内部模块。宿主原本以 ES Module 加载 manifest 入口，无需新加载器。
+保留 `APP_INITIALIZED`、`CHAT_CHANGED`、`#extensions_settings2`（回退 `#extensions_settings`），以及 `eventTypes/event_types`、`chatId/getCurrentChatId()` 兼容方式。所有项目模块使用相对路径，未导入宿主内部模块。宿主原本以 ES Module 加载 manifest 入口，无需新加载器。
 
 依据：[官方扩展规范与 characterId 限制](https://docs.sillytavern.app/for-contributors/writing-extensions/)、[公开 Context](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/st-context.js)、[扩展加载器](https://github.com/SillyTavern/SillyTavern/blob/1.18.0/public/scripts/extensions.js)。
 
@@ -149,10 +170,12 @@ node scripts/browser-check.cjs
 
 Android 重点验收：首次自动显示当前角色；「切换到我 / 跟随当前角色」即时刷新；切换聊天自动跟随并保持各聊天状态独立；查看 NPC 后货币修改只影响操作角色；旧存档迁移并刷新保留；320px、真实软键盘和浮层关闭。
 
-本次修正 amend 尚未推送的控制/查看架构提交。在项目普通 PowerShell 中发布本地提交：
+新增测试覆盖行动 A/B 隔离、同名拒绝、新聊天空表、删除确认、失败回滚、扩展字段保留、本地指令及不修改聊天文本。浏览器覆盖缺少设置/聊天锚点时初始化、局部 DOM 重建恢复、普通变动不重复创建、刷新恢复行动及入口，以及长行动名称的 320px 布局。这些均为模拟宿主测试，未代替 Android 实机验收。
+
+本次创建提交 `Fix floating launcher and add per-chat action registry`。在项目普通 PowerShell 中发布本地提交：
 
 ```sh
 git push origin main
 ```
 
-不在 Codex 中 push。本轮仅修正控制/查看架构，不开发副 API 或任何后续玩法。
+不在 Codex 中 push。本轮仅修复入口并增加行动注册表，不开发副 API 或正式行动逻辑，完成后停止。

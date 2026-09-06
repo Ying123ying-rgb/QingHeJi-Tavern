@@ -9,7 +9,7 @@ if (!vm.SourceTextModule) {
 }
 const root = path.resolve(__dirname, '..');
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
-assert.equal(manifest.version, '0.1.3');
+assert.equal(manifest.version, '0.1.4');
 assert.equal(manifest.display_name, '酒馆人生模拟器');
 assert.equal(manifest.minimum_client_version, '1.18.0');
 assert.equal(manifest.loading_order, 100);
@@ -57,7 +57,10 @@ let saves = 0, settingSaves = 0;
 let save = async () => { saves++; };
 let confirmed = true, prompted = '洛冉', onConfirm = () => {}, onPrompt = () => {};
 const confirmations = [];
+const commands = {}, notices = [];
 const ctx = () => ({ characterId, characters, groupId, name1: '我', chatId, chat, chatMetadata: metadata,
+    SlashCommandParser: { addCommandObject: command => { assert(!commands[command.name]); commands[command.name] = command; } },
+    SlashCommand: { fromProps: value => value },
     extensionSettings, saveMetadata: () => save(), saveSettingsDebounced: () => { settingSaves++; },
     eventTypes: { APP_INITIALIZED: 'init', CHAT_CHANGED: 'chat' },
     eventSource: { on: (name, handler) => { listeners[name] = handler; } },
@@ -65,7 +68,7 @@ const ctx = () => ({ characterId, characters, groupId, name1: '我', chatId, cha
 const windowEvents = new Node('window');
 const sandbox = vm.createContext({ SillyTavern: { getContext: ctx }, document: { createElement: create, getElementById: get, body, documentElement: html },
     AbortController, innerHeight: 740, innerWidth: 320, addEventListener: windowEvents.addEventListener.bind(windowEvents),
-    console: { error() {} },
+    console: { error() {} }, toastr: { info: message => notices.push(message) },
     confirm: message => { confirmations.push(message); onConfirm(); return confirmed; },
     prompt: () => { onPrompt(); return prompted; },
 });
@@ -319,7 +322,51 @@ async function run() {
     assert.equal(windowEvents.events.resize, undefined);
     get('qhjt-master').checked = true; await get('qhjt-master').events.change();
     for (const id of ['qhjt-entry', 'qhjt-overlay', 'qhjt-panel']) assert.equal(nodes.filter(node => node.id === id && node.isConnected).length, 1);
+    assert.equal(get('qhjt-host').parentElement, body);
+    assert.equal(get('qhjt-overlay').parentElement, body);
+    const registry = modules.get(path.join(root, 'core/actions.js')).namespace;
+    equal(createState().actions, {});
+    const withoutActions = plain(game()); delete withoutActions.actions;
+    const normalized = readState(withoutActions);
+    equal(normalized.actions, {}); assert(needsMigration(withoutActions));
+    for (const key of ['world', 'actors', 'controlMode', 'calendar']) equal(normalized[key], withoutActions[key]);
+    const future = createState();
+    const custom = registry.addAction(future, '未来行动');
+    Object.assign(custom, { duration: 120, costs: { stamina: 10 }, requirements: [], effects: [], location: 'custom', cooldown: 2, aiRoute: 'secondary', handler: 'opaque', metadata: { version: 2 } });
+    equal(readState(future).actions, future.actions);
+    equal(resetWorld(future, 'modern_city').actions, future.actions);
+    const stableId = custom.id; registry.removeAction(future, custom.label);
+    assert.equal(registry.addAction(future, custom.label).id, stableId);
+    const command = value => commands.life.callback({}, value);
+    await switchChat('action-A', {}); await enable();
+    const actionA = metadata;
+    assert.equal(await command('action add 摆摊'), '');
+    assert.equal(registry.listActions(game()).length, 1);
+    await command('action add  摆摊  '); assert.equal(registry.listActions(game()).length, 1);
+    assert.match(notices.at(-1), /同名/);
+    await command('action add'); assert.match(notices.at(-1), /不能为空/);
+    await command('action list'); assert.equal(notices.at(-1), '摆摊');
+    await switchChat('action-B', {}); await enable();
+    const actionB = metadata; equal(game().actions, {});
+    prompted = '本地自定义'; await click('qhjt-add-action');
+    assert.equal(registry.listActions(game())[0].label, prompted);
+    await switchChat('action-A', actionA);
+    assert.equal(registry.listActions(game())[0].label, '摆摊');
+    const beforeExecute = plain(game());
+    get('qhjt-action-list').children[0].children[0].events.click();
+    assert.equal(notices.at(-1), '该行动尚未配置执行逻辑。'); equal(game(), beforeExecute);
+    confirmed = false; await command('action remove 摆摊'); assert.equal(registry.listActions(game()).length, 1);
+    confirmed = true; await command('action remove 摆摊'); equal(game().actions, {});
+    assert.equal(confirmations.at(-1), '确定从当前聊天移除行动‘摆摊’吗？');
+    await switchChat('action-B', actionB); assert.equal(registry.listActions(game()).length, 1);
+    const beforeActionFailure = plain(game()); save = async () => { throw Error('save failed'); };
+    await command('action add 保存失败'); equal(game(), beforeActionFailure); assert.match(notices.at(-1), /保存失败/);
+    save = async () => { saves++; };
+    assert.equal(extensionSettings[KEY].actions, undefined);
+    get('qhjt-host').remove(); await listeners.init();
+    for (const id of ['qhjt-entry', 'qhjt-overlay', 'qhjt-panel']) assert.equal(nodes.filter(node => node.id === id && node.isConnected).length, 1);
     await switchChat(undefined, {}); assert.equal(get('qhjt-game').disabled, true);
+    await command('action add 无聊天'); assert.equal(game(), undefined);
     assert.equal(JSON.stringify(card), originalCard); assert.equal(JSON.stringify(chat), originalChat);
     assert.equal(JSON.stringify(worldTemplates), templateSnapshot);
     console.log('PASS: character/user modes, automatic actors, chat following, independent states, NPC inspection, legacy player/active migration, templates, calendar, save rollback, syntax/paths and UI lifecycle.');

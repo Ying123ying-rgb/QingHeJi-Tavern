@@ -10,7 +10,7 @@
 #qhjt-host { width: 0; height: 0; flex: 0 0 0; }
 #qhjt-entry {
     position: fixed;
-    z-index: 20;
+    z-index: 100;
     width: 48px;
     height: 48px;
     min-height: 44px;
@@ -73,7 +73,8 @@
 }
 #qhjt-overlay .qhjt-button:disabled { opacity: 0.5; cursor: default; }
 #qhjt-entry:focus-visible, #qhjt-overlay :focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
-#qhjt-overlay .qhjt-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; flex: 0 0 auto; padding: 4px 0; }
+#qhjt-overlay .qhjt-tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; flex: 0 0 auto; padding: 4px 0; }
+#qhjt-overlay .qhjt-tabs .qhjt-button { padding-inline: 2px; min-width: 0; }
 #qhjt-overlay [aria-selected="true"] { border-color: currentColor; font-weight: bold; }
 #qhjt-overlay .qhjt-scroll { min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; touch-action: pan-y; padding: 4px 2px; }
 #qhjt-overlay .qhjt-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }

@@ -91,13 +91,13 @@ export function createState(templateId = DEFAULT_TEMPLATE_ID, enabled = false) {
     return {
         schemaVersion: 5, enabled: base.enabled, world: base.world,
         calendar: base.calendar, worldState: {}, controlMode: 'character', inspectedActorId: null,
-        actors: {}, nextActorNumber: 1,
+        actors: {}, nextActorNumber: 1, actions: {},
     };
 }
 
 export function needsMigration(saved) {
     if (!isObject(saved)) return false;
-    if (isObject(saved.actors)) return !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
+    if (isObject(saved.actors)) return !isObject(saved.actions) || !['character', 'user'].includes(saved.controlMode) || Object.hasOwn(saved, 'playerActorId') || Object.hasOwn(saved, 'activeActorId');
     return !Object.hasOwn(saved, 'actors')
         && (isLegacyState(saved) || Object.hasOwn(saved, 'currency') || Object.hasOwn(saved, 'stats'));
 }
@@ -107,6 +107,7 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
     if (!Object.hasOwn(saved, 'actors') && needsMigration(saved)) {
         const old = readSingleState(saved);
         const result = { ...copy(old), ...createState(getTemplate(old.world.templateId)?.id, old.enabled) };
+        result.actions = isObject(saved.actions) ? copy(saved.actions) : {};
         result.world = old.world;
         result.calendar = old.calendar;
         result.worldState = old.worldState;
@@ -127,6 +128,7 @@ export function readState(saved, descriptor = { name: '默认人物', sourceType
     result.calendar = normalized.calendar;
     result.worldState = normalized.worldState;
     result.enabled = saved.enabled === true;
+    result.actions = isObject(saved.actions) ? copy(saved.actions) : {};
     result.actors = {};
     for (const [id, actor] of Object.entries(isObject(saved.actors) ? saved.actors : {})) {
         if (!isObject(actor) || !/^actor_[A-Za-z0-9_-]+$/.test(id)) continue;
@@ -211,6 +213,7 @@ export function changeCurrency(game, delta, ctx) {
 
 export function resetWorld(game, templateId) {
     const result = createState(templateId, game.enabled);
+    result.actions = copy(game.actions ?? {});
     result.nextActorNumber = game.nextActorNumber;
     for (const actor of Object.values(game.actors)) {
         result.actors[actor.id] = createActor(templateId, actor, actor.id);
